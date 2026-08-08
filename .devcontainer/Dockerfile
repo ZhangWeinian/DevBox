@@ -158,18 +158,16 @@ ENV CCACHE_DIR=/home/vscode/.cache/ccache
 #-----------------------------------------------------
 # 个人配置文件：母版统一放在 ~/.format/，作为唯一数据源
 # - .vimrc：vim 固定读取 ~/.vimrc，单独软链
-# - 其余五个文件：均通过 devcontainer.json 中各扩展的绝对路径设置直接引用，本身不需要出现在任何项目目录中
-# - 仅 .clang-format 例外：clang-format 采用"从文件所在目录向上查找"的机制，因此需要 link-default-configs.sh 在每个项目根目录下补一个软链接
+# - 其余五个文件均通过 devcontainer.json 中各扩展的绝对路径设置直接引用
+# - clang-format 模板放在 ~/default.clang-format，供开发者手动复制到项目目录
 #-----------------------------------------------------
 COPY --chown=vscode:vscode .format/ /home/vscode/.format/
 
 RUN set -eux \
     && ln -sf /home/vscode/.format/.vimrc /home/vscode/.vimrc \
-    && chown -h vscode:vscode /home/vscode/.vimrc
-
-COPY scripts/link-default-configs.sh /usr/local/bin/link-default-configs.sh
-RUN set -eux \
-    && chmod +x /usr/local/bin/link-default-configs.sh
+    && chown -h vscode:vscode /home/vscode/.vimrc \
+    && ln -sf /home/vscode/.format/.clang-format /home/vscode/default.clang-format \
+    && chown -h vscode:vscode /home/vscode/default.clang-format
 
 # 预创建全部缓存目录并授权 vscode 用户
 # 无论后续被 bind mount 覆盖，还是在冻结导出时被 COPY 填充，权限保持一致
