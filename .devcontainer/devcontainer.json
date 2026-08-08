@@ -73,7 +73,9 @@
                 "prettier.configPath": "/home/vscode/.format/.prettierrc.json",
                 "prettier.ignorePath": "/home/vscode/.format/.prettierignore",
                 "ruff.args": ["--config=/home/vscode/.format/ruff.toml"],
-                "cmakeFormat.args": ["-c", "/home/vscode/.format/.cmake-format.yaml"]
+                "cmakeFormat.args": ["-c", "/home/vscode/.format/.cmake-format.yaml"], 
+                "sonarlint.pathToNodeExecutable": "/usr/local/bin/node", 
+                "sonarlint.ls.javaHome": "/usr/lib/jvm/msopenjdk-21"
             }
         }
     },
