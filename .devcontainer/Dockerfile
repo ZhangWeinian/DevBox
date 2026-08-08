@@ -63,6 +63,16 @@ RUN set -eux \
 # uv：官方多架构镜像
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
+# 设置 uv 的全局安装目录（避免使用 /root）
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
+ENV UV_TOOL_DIR=/opt/uv/tools
+ENV UV_TOOL_BIN_DIR=/usr/local/bin
+
+# 创建目录并授权给 vscode 用户（即使当前是 root，也要为后续切换准备）
+RUN set -eux \
+    && mkdir -p ${UV_PYTHON_INSTALL_DIR} ${UV_TOOL_DIR} \
+    && chown -R vscode:vscode /opt/uv
+
 # Python：通过 uv 安装最新版本，并全局软链，这样全程只有一套 Python，工具链和临时脚本都能找到
 RUN set -eux \
     && uv python install --python-preference only-managed \
@@ -74,7 +84,6 @@ RUN set -eux \
     && ln -sf "${PYTHON_DIR}/pip3" /usr/local/bin/pip3
 
 # CMake / Ninja / cmake-format：通过 uv tool install（隔离虚拟环境）
-ENV UV_TOOL_BIN_DIR=/usr/local/bin
 RUN set -eux \
     && uv tool install cmake \
     && uv tool install ninja \
@@ -188,3 +197,8 @@ RUN set -eux \
 # [Optional] 预装 vcpkg 端口（manifest 模式项目一般不需要这里预装）
 # RUN set -eux \
 #     && su vscode -c "${VCPKG_ROOT}/vcpkg install <your-port-name-here>"
+
+USER vscode
+
+# 保持容器前台运行，避免启动后立即退出，这样 docker run -d 无需额外指定命令
+CMD ["sleep", "infinity"]

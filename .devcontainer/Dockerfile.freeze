@@ -31,3 +31,6 @@ RUN chown -R vscode:vscode \
 
 WORKDIR /workspaces/${PROJECT_DIR_NAME}
 USER vscode
+
+# 保持容器前台运行，避免启动后立即退出，这样 docker run -d 无需额外指定命令
+CMD ["sleep", "infinity"]
