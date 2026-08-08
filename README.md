@@ -39,7 +39,7 @@ chmod +x build.sh export.sh import.sh
 ./export.sh
 ```
 
-> 这会在当前目录生成 `devenv-YYYYMMDD_HHMMSS.tar` 文件，包含了完整的工具链和预安装的库（需在 `Dockerfile` 中提前添加）
+> 这会在当前目录生成 `devenv-<架构>-<日期_时间>.tar`（例如 `devenv-amd64-20260809_223000.tar`），包含了完整的工具链和预安装的库（需在 `Dockerfile` 中提前添加）
 
 ### 在离线设备上导入并启动
 
@@ -47,10 +47,10 @@ chmod +x build.sh export.sh import.sh
 
 ```bash
 # 加载镜像并启动容器（无挂载）
-./import.sh devenv-YYYYMMDD_HHMMSS.tar
+./import.sh devenv-ARCH-YYYYMMDD_HHMMSS.tar
 
 # 或者加载后挂载本地代码目录
-./import.sh devenv-YYYYMMDD_HHMMSS.tar /path/to/your/project
+./import.sh devenv-ARCH-YYYYMMDD_HHMMSS.tar /path/to/your/project
 ```
 
 ### 日常开发（用 `VS Code`）
