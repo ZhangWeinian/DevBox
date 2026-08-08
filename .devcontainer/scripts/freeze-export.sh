@@ -98,6 +98,20 @@ docker save "${FREEZE_TAG}" -o "${OUTPUT_NAME}.tar"
 docker rmi "${FREEZE_TAG}" >/dev/null 2>&1 || true
 
 TAR_SIZE=$(du -sh "${OUTPUT_NAME}.tar" | cut -f1)
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+HELPER_SCRIPT="${SCRIPT_DIR}/run_dev_with_code.sh"
+if [ -f "${HELPER_SCRIPT}" ]; then
+    TARGET_SCRIPT="${OUTPUT_NAME}.tar.sh"
+    cp "${HELPER_SCRIPT}" "${TARGET_SCRIPT}"
+    chmod +x "${TARGET_SCRIPT}" 2>/dev/null || true
+    echo ""
+    echo " 辅助脚本已生成：${TARGET_SCRIPT}"
+else
+    echo ""
+    echo "警告：未找到辅助脚本 ${HELPER_SCRIPT}，跳过复制"
+fi
+
 echo ""
 echo "========================================"
 echo " 完成！"
