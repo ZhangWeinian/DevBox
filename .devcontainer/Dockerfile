@@ -196,6 +196,9 @@ RUN set -eux \
 # RUN set -eux \
 #     && su vscode -c "${VCPKG_ROOT}/vcpkg install <your-port-name-here>"
 
+RUN set -eux \
+    && mkdir -p /home/vscode/workspace \
+    && chown vscode:vscode /home/vscode/workspace
 USER vscode
 
 # 保持容器前台运行，避免启动后立即退出，这样 docker run -d 无需额外指定命令
