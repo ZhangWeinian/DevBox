@@ -65,6 +65,15 @@ RUN set -eux \
     && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/*
 
+# 安装 .NET 10 LTS
+RUN set -eux \
+    && wget https://packages.microsoft.com/config/debian/13/packages-microsoft-prod.deb -O packages-microsoft-prod.deb \
+    && dpkg -i packages-microsoft-prod.deb \
+    && rm packages-microsoft-prod.deb \
+    && apt-get update \
+    && apt-get install -yq dotnet-sdk-10.0 \
+    && rm -rf /var/lib/apt/lists/*
+
 # uv：官方多架构镜像
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
