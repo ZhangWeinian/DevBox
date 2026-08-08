@@ -1,15 +1,13 @@
 # syntax=docker/dockerfile:1.7
 
-# 用途：在基础开发镜像之上，把工具链缓存和项目代码"烘焙"进镜像层，
-# 生成一个完全自包含、可离线运行的静态镜像。
-# 构建方式见 scripts/freeze-export.sh，不要直接手动 docker build 这个文件。
+# 用途：在基础开发镜像之上，把工具链缓存和项目代码"烘焙"进镜像层，生成一个完全自包含、可离线运行的静态镜像
+# 构建方式见 scripts/freeze-export.sh，不要直接手动 docker build 这个文件
 
 ARG BASE_IMAGE=devenv:latest
 FROM ${BASE_IMAGE}
 
-# 以下目录由 freeze-export.sh 通过 rsync 预先填充进临时构建上下文，
-# 构建时作为普通 COPY 源，不依赖 docker buildx --build-context 特性。
-# 各目录若为空（首次导出、该工具从未用过），COPY 会拷入空目录，不会报错。
+# 以下目录由 freeze-export.sh 通过 rsync 预先填充进临时构建上下文，构建时作为普通 COPY 源，不依赖 docker buildx --build-context 特性
+# 各目录若为空，COPY 会拷入空目录，不会报错。
 COPY caches/vcpkg/   /home/vscode/.cache/vcpkg/
 COPY caches/ccache/  /home/vscode/.cache/ccache/
 COPY caches/uv/      /home/vscode/.cache/uv/
@@ -21,7 +19,9 @@ COPY caches/gradle/  /home/vscode/.gradle/
 ARG PROJECT_DIR_NAME=project
 COPY project/ /workspaces/${PROJECT_DIR_NAME}/
 
-# 统一修正权限（COPY 默认以 root 身份写入）
+# 离线镜像不依赖 VS Code 的 postCreateCommand 钩子，构建时主动补链一次
+RUN link-default-configs.sh /workspaces/${PROJECT_DIR_NAME}
+
 RUN chown -R vscode:vscode \
         /home/vscode/.cache \
         /home/vscode/.npm \

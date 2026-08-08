@@ -26,8 +26,6 @@ sudo apt-get install -y docker-buildx  # Ubuntu/Debian
 
 ```bash
 mkdir -p .devcontainer
-# 将下方 Dockerfile 内容保存到 .devcontainer/Dockerfile
-
 DOCKER_BUILDKIT=1 docker build -t devenv:latest -f .devcontainer/Dockerfile .devcontainer
 ```
 
@@ -72,17 +70,19 @@ docker run -it --rm devenv:freeze-my-project-amd64-20250722 bash
 | 工具         | 版本            | 来源                           |
 | :----------- | :-------------- | :----------------------------- |
 | GCC/G++      | Debian 13 stock | apt                            |
-| CMake        | 最新            | PyPI wheel (Kitware)           |
-| Ninja        | 最新            | PyPI wheel (Ninja)             |
+| CMake        | 构建时最新      | PyPI wheel (Kitware)           |
+| Ninja        | 构建时最新      | PyPI wheel (Ninja)             |
 | Boost        | Debian 13 stock | apt                            |
 | Java         | 21 LTS          | Microsoft OpenJDK (distroless) |
-| Python       | 3.13            | Debian 13 + Features           |
-| uv           | 最新            | GitHub Container Registry      |
-| Node.js      | LTS             | docker.io/library/node         |
-| npm/corepack | 最新            | Node.js 标准库                 |
-| vcpkg        | 最新            | Microsoft 官方（git pull）     |
+| Python       | uv最新          | uv                             |
+| uv           | 构建时最新      | GitHub Container Registry      |
+| Node.js      | 构建时最新 LTS  | docker.io/library/node         |
+| npm/corepack | 构建时最新      | Node.js 标准库                 |
+| vcpkg        | 构建时最新      | Microsoft 官方（git pull）     |
 | ccache       | Debian 13 stock | apt                            |
-| git          | 最新            | Features                       |
+| git          | 构建时最新      | Features                       |
+| clang-format | 构建时最新      | LLVM 官方 apt.llvm.org         |
+| cmake-format | 构建时最新      | PyPI                           |
 
 ### 缓存目录映射
 

@@ -69,14 +69,17 @@
                     "miDebuggerPath": "/usr/bin/gdb"
                 },
                 "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
-                "terminal.integrated.defaultProfile.linux": "bash"
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "prettier.configPath": "/home/vscode/.format/.prettierrc.json",
+                "prettier.ignorePath": "/home/vscode/.format/.prettierignore",
+                "ruff.args": ["--config=/home/vscode/.format/ruff.toml"],
+                "cmakeFormat.args": ["-c", "/home/vscode/.format/.cmake-format.yaml"]
             }
         }
     },
 
     "features": {
-        "ghcr.io/devcontainers/features/git:1": { "version": "latest" },
-        "ghcr.io/devcontainers/features/python:1": { "version": "latest" }
+        "ghcr.io/devcontainers/features/git:1": { "version": "latest" }
     },
 
     "remoteUser": "vscode"
