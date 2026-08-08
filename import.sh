@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# 导入镜像 tar 包并/或启动开发容器
+# 导入镜像 tar 包并启动开发容器
 # 用法：
-#   ./import.sh                           # 若镜像存在，删除旧容器并用镜像启动（不挂载）；若不存在报错
-#   ./import.sh /path/to/code             # 挂载指定目录启动容器（镜像必须已存在）
-#   ./import.sh myimage.tar               # 仅加载 tar（若已有同名镜像则删除并重新加载）
-#   ./import.sh myimage.tar /path/to/code # 加载 tar 并启动容器，挂载指定目录
+#   ./import.sh                           # 若本地镜像存在，启动无挂载容器；否则报错
+#   ./import.sh /path/to/code             # 若本地镜像存在，启动容器并挂载目录；否则报错
+#   ./import.sh myimage.tar               # 加载 tar，删除旧容器/镜像，启动新容器（无挂载）
+#   ./import.sh myimage.tar /path/to/code # 加载 tar，删除旧容器/镜像，启动新容器并挂载目录
 #   ./import.sh -h|--help                 # 显示帮助
 
 set -euo pipefail
@@ -18,16 +18,17 @@ CONTAINER_NAME="dev-container"
 show_help() {
     cat <<EOF
 用法:
-  $0                              # 若镜像存在，删除旧容器并用镜像启动（不挂载）；若不存在报错
-  $0 /path/to/code                # 启动容器，挂载指定目录（镜像必须已存在）
-  $0 myimage.tar                  # 仅加载镜像 tar（若已有同名镜像则删除并重新加载）
-  $0 myimage.tar /path/to/code    # 加载镜像 tar 并启动容器，挂载指定目录
+  $0                              # 若本地镜像存在，启动无挂载容器；否则报错
+  $0 /path/to/code                # 若本地镜像存在，启动容器并挂载目录；否则报错
+  $0 myimage.tar                  # 加载 tar，删除旧容器/镜像，启动新容器（无挂载）
+  $0 myimage.tar /path/to/code    # 加载 tar，删除旧容器/镜像，启动新容器并挂载目录
   $0 -h|--help                    # 显示帮助
 
 说明:
   镜像名称固定为 ${FULL_IMAGE}
   容器名称固定为 ${CONTAINER_NAME}
-  当指定挂载目录时，容器内路径为 /home/vscode/workspace/<目录名>
+  如果指定了 tar 包，则强制从 tar 加载，覆盖本地同名镜像。
+  如果未指定 tar，则使用本地镜像，若不存在则报错。
 EOF
 }
 
@@ -39,38 +40,30 @@ fi
 
 TAR_FILE=""
 MOUNT_DIR=""
-JUST_LOAD=false
 
-# 无参数：启动容器但不挂载目录（镜像必须存在）
+# 解析参数
 if [ $# -eq 0 ]; then
-    if ! docker image inspect "${FULL_IMAGE}" >/dev/null 2>&1; then
-        echo "错误: 镜像 ${FULL_IMAGE} 不存在，请先加载或构建"
-        exit 1
-    fi
-    # MOUNT_DIR 保持为空，进入启动逻辑
-else
-    # 有参数解析
-    if [ $# -eq 1 ]; then
-        if [[ "$1" == *.tar ]]; then
-            TAR_FILE="$1"
-            JUST_LOAD=true   # 仅加载 tar，不启动
-        else
-            MOUNT_DIR="$1"
-        fi
-    elif [ $# -eq 2 ]; then
-        if [[ "$1" == *.tar ]]; then
-            TAR_FILE="$1"
-            MOUNT_DIR="$2"
-        else
-            echo "错误: 第一个参数必须是 .tar 文件"
-            show_help
-            exit 1
-        fi
+    # 无参数：不加载 tar，不挂载
+    :
+elif [ $# -eq 1 ]; then
+    if [[ "$1" == *.tar ]]; then
+        TAR_FILE="$1"
     else
-        echo "错误: 参数数量不正确"
+        MOUNT_DIR="$1"
+    fi
+elif [ $# -eq 2 ]; then
+    if [[ "$1" == *.tar ]]; then
+        TAR_FILE="$1"
+        MOUNT_DIR="$2"
+    else
+        echo "错误: 第一个参数必须是 .tar 文件"
         show_help
         exit 1
     fi
+else
+    echo "错误: 参数数量不正确"
+    show_help
+    exit 1
 fi
 
 # 处理挂载目录（如果指定）
@@ -81,15 +74,23 @@ if [ -n "${MOUNT_DIR}" ]; then
     fi
 fi
 
-# 加载镜像（如果指定 tar）
+# 处理 tar 包（高优先级）
 if [ -n "${TAR_FILE}" ]; then
     if [ ! -f "${TAR_FILE}" ]; then
         echo "错误: tar 文件 '${TAR_FILE}' 不存在"
         exit 1
     fi
 
+    # 强制清理：停止并删除现有容器
+    if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        echo "==> 停止并删除容器 ${CONTAINER_NAME}"
+        docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+        docker rm "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+    fi
+
+    # 删除旧镜像（如果有）
     if docker image inspect "${FULL_IMAGE}" >/dev/null 2>&1; then
-        echo "==> 检测到已存在镜像 ${FULL_IMAGE}，将删除并重新加载"
+        echo "==> 删除旧镜像 ${FULL_IMAGE}"
         docker rmi -f "${FULL_IMAGE}" >/dev/null 2>&1
     fi
 
@@ -98,26 +99,20 @@ if [ -n "${TAR_FILE}" ]; then
     echo "==> 镜像加载完成"
 fi
 
-# 如果仅是加载 tar，则退出
-if [ "${JUST_LOAD}" = true ] && [ -z "${MOUNT_DIR}" ]; then
-    echo "==> 仅加载镜像，不启动容器"
-    exit 0
-fi
-
-# 启动容器（镜像必须存在）
+# 确保镜像存在
 if ! docker image inspect "${FULL_IMAGE}" >/dev/null 2>&1; then
-    echo "错误: 镜像 ${FULL_IMAGE} 不存在，请先加载或构建"
+    echo "错误: 镜像 ${FULL_IMAGE} 不存在，请先构建或提供有效的 tar 包"
     exit 1
 fi
 
-# 停止并删除旧容器
+# 删除可能遗留的旧容器（确保干净）
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     echo "==> 停止并删除旧容器: ${CONTAINER_NAME}"
     docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
     docker rm "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 fi
 
-# 构建 docker run 参数
+# 启动新容器
 DOCKER_RUN_ARGS=(
     -d
     --name "${CONTAINER_NAME}"
