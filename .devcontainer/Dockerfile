@@ -62,6 +62,7 @@ RUN set -eux \
         g++-aarch64-linux-gnu \
         binutils-aarch64-linux-gnu \
         libc6-dev-arm64-cross \
+        libusb \
     && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/*
 
