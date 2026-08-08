@@ -57,6 +57,7 @@ RUN set -eux \
         openssh-client \
         iproute2 \
         dnsutils \
+        iputils-ping \ 
     && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/*
 
