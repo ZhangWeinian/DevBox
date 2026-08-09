@@ -159,7 +159,8 @@ RUN set -eux \
         set -eux \
         && cmake --version \
         && ruff --version \
-    "
+    " \
+    && ln -sf /usr/local/bin/ninja /usr/bin/ninja
 
 # clang-format：用 LLVM 官方 apt 仓库（apt.llvm.org），版本号动态查询 GitHub 最新 release
 RUN set -eux \
@@ -212,6 +213,7 @@ RUN set -eux \
 ENV VCPKG_DOWNLOADS=/home/vscode/.cache/vcpkg/downloads
 ENV VCPKG_BINARY_SOURCES="clear;files,/home/vscode/.cache/vcpkg/archives,readwrite"
 ENV VCPKG_FEATURE_FLAGS=manifests,versions,binarycaching
+ENV VCPKG_NINJA_PATH=/usr/bin/ninja
 
 # 立即创建 vcpkg 缓存目录并授权
 RUN set -eux \
@@ -268,8 +270,6 @@ RUN set -eux \
 RUN --mount=type=cache,target=/home/vscode/.cache/vcpkg,id=vcpkg-cache set -eux \
     && su vscode -c "\
         set -eux \
-        && export PATH=/usr/local/bin:\$PATH \
-        && export VCPKG_NINJA_PATH=/usr/local/bin/ninja \
         && vcpkg install \
             openssl:x64-linux openssl:arm64-linux \
             pugixml:x64-linux pugixml:arm64-linux \
