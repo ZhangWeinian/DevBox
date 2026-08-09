@@ -4,18 +4,16 @@
 ARG JDK_MAJOR_VERSION=21
 ARG NODE_VARIANT=lts
 
-# 阶段一：Microsoft OpenJDK（实际路径 /usr/jdk）
+# Microsoft OpenJDK（实际路径 /usr/jdk）
 FROM mcr.microsoft.com/openjdk/jdk:${JDK_MAJOR_VERSION}-distroless AS jdk-src
 
-# 阶段二：Node.js LTS
-# 务必用 Debian 系变体（默认即是），不要用 -alpine（musl 与基础镜像 glibc 不兼容）
+# Node.js LTS ，务必用 Debian 系变体（默认即是），不要用 -alpine ：musl 与基础镜像 glibc 不兼容
 FROM node:${NODE_VARIANT} AS node-src
 
 # 主阶段
 FROM mcr.microsoft.com/devcontainers/cpp:3-debian13
 
 # 让 vscode 对 /usr/local/bin 有写权限
-# 注意：root 依然可以无条件写该目录，所以仍以 root 身份执行的步骤（clang-format 软链等）不受影响
 RUN chown vscode:vscode /usr/local/bin
 
 # 基础系统包
@@ -76,7 +74,9 @@ RUN set -eux \
         lsb-release \
         gnupg \
     && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p "${CCACHE_DIR}" \
+    && chown -R vscode:vscode "${CCACHE_DIR}"
 
 # 安装 .NET 10 LTS
 RUN set -eux \
@@ -100,8 +100,14 @@ RUN set -eux \
 
 # 创建目录
 RUN set -eux \
-    && mkdir -p ${UV_PYTHON_INSTALL_DIR} ${UV_TOOL_DIR} \
-    && chown -R vscode:vscode /opt/uv
+    && mkdir -p \
+        "${UV_PYTHON_INSTALL_DIR}" \
+        "${UV_TOOL_DIR}" \
+        "${UV_CACHE_DIR}" \
+        "${PIP_CACHE_DIR}" \
+    && chown -R vscode:vscode /opt/uv \
+        "${UV_CACHE_DIR}" \
+        "${PIP_CACHE_DIR}"
 
 # Python：通过 uv 安装最新版本，并全局软链，这样全程只有一套 Python，工具链和临时脚本都能找到
 RUN set -eux \
@@ -173,7 +179,9 @@ RUN set -eux \
     && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && if [ -d /usr/local/lib/node_modules/corepack ]; then \
         ln -sf /usr/local/lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack; \
-    fi
+    fi \
+    && mkdir -p /home/vscode/.npm \
+    && chown -R vscode:vscode /home/vscode/.npm
 RUN set -eux \
     && su vscode -c "\
         set -eux \
@@ -190,7 +198,11 @@ ENV VCPKG_DOWNLOADS=/home/vscode/.cache/vcpkg/downloads
 ENV VCPKG_BINARY_SOURCES="clear;files,/home/vscode/.cache/vcpkg/archives,readwrite"
 ENV VCPKG_FEATURE_FLAGS=manifests,versions,binarycaching
 
-RUN chown -R vscode:vscode "${VCPKG_ROOT}"
+# 立即创建 vcpkg 缓存目录并授权
+RUN set -eux \
+    && mkdir -p /home/vscode/.cache/vcpkg/downloads /home/vscode/.cache/vcpkg/archives \
+    && chown -R vscode:vscode /home/vscode/.cache/vcpkg \
+    && chown -R vscode:vscode "${VCPKG_ROOT}"
 
 COPY <<'EOF' /tmp/refresh-vcpkg.sh
 #!/usr/bin/env bash
@@ -221,45 +233,35 @@ RUN set -eux \
     && ln -sf /home/vscode/.format/.clang-format /home/vscode/default.clang-format \
     && chown -h vscode:vscode /home/vscode/default.clang-format
 
-# 预创建全部缓存目录并授权 vscode 用户
+# 预创建其他缓存目录并授权 vscode 用户
 # 无论后续被 bind mount 覆盖，还是在冻结导出时被 COPY 填充，权限保持一致
 RUN set -eux \
     && mkdir -p \
-        /home/vscode/.cache/vcpkg/downloads \
-        /home/vscode/.cache/vcpkg/archives \
-        /home/vscode/.cache/ccache \
-        /home/vscode/.cache/uv \
-        /home/vscode/.cache/pip \
-        /home/vscode/.npm \
         /home/vscode/.local/share/pnpm/store \
         /home/vscode/.cache/yarn \
         /home/vscode/.m2 \
         /home/vscode/.gradle \
         /home/vscode/.vscode-server \
     && chown -R vscode:vscode \
-        /home/vscode/.cache \
-        /home/vscode/.npm \
         /home/vscode/.local \
+        /home/vscode/.cache/yarn \
         /home/vscode/.m2 \
         /home/vscode/.gradle \
         /home/vscode/.vscode-server
-RUN set -eux \
-    && chown -R vscode:vscode /opt/uv
 
 # [Optional] 预装 vcpkg 端口（manifest 模式项目一般不需要这里预装）
 # RUN set -eux \
 #     && su vscode -c "${VCPKG_ROOT}/vcpkg install <your-port-name-here>"
 
+# 工作目录及最终用户切换
 RUN su vscode -c '\
         set -eux \
         && echo "PATH=$PATH" \
         && echo "VCPKG_ROOT=$VCPKG_ROOT" \
     '
-
 RUN set -eux \
     && mkdir -p /home/vscode/workspace \
     && chown vscode:vscode /home/vscode/workspace
-
 USER vscode
 
 # 保持容器前台运行，避免启动后立即退出，这样 docker run -d 无需额外指定命令
