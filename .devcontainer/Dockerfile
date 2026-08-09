@@ -14,21 +14,29 @@ FROM node:${NODE_VARIANT} AS node-src
 # 主阶段
 FROM mcr.microsoft.com/devcontainers/cpp:3-debian13
 
+# 让 vscode 对 /usr/local/bin 有写权限
+# 注意：root 依然可以无条件写该目录，所以仍以 root 身份执行的步骤（clang-format 软链等）不受影响
+RUN chown vscode:vscode /usr/local/bin
+
 # 基础系统包
 # 含 python3（确保 uv pip install --system 不依赖 Feature 执行顺序）
 # 含 ccache（C/C++ 编译加速）
 # 含 fd-find（Debian 包名，实际二进制为 fdfind，下方补 fd 软链）
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CCACHE_DIR=/home/vscode/.cache/ccache
+ENV USE_CCACHE=1
+ENV CCACHE_SLOPPINESS=file_macro,include_file_mtime,time_macros
+ENV CCACHE_UMASK=002
 RUN set -eux \
     && apt-get update \
     && apt-get -yq upgrade \
-    && export DEBIAN_FRONTEND=noninteractive \
     && apt-get -yq install --no-install-recommends \
         libboost-all-dev \
         libssl-dev \
         libgl-dev \
-        bash \
         sudo \
         curl \
+        wget \
         zip \
         unzip \
         tar \
@@ -58,14 +66,15 @@ RUN set -eux \
         openssh-client \
         iproute2 \
         dnsutils \
-        iputils-ping \ 
+        iputils-ping \
         openssl \
         gcc-aarch64-linux-gnu \
         g++-aarch64-linux-gnu \
         binutils-aarch64-linux-gnu \
         libc6-dev-arm64-cross \
-        libusb-1.0-0 \
         libusb-1.0-0-dev \
+        lsb-release \
+        gnupg \
     && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/*
 
@@ -76,24 +85,31 @@ RUN set -eux \
     && rm packages-microsoft-prod.deb \
     && apt-get update \
     && apt-get install -yq dotnet-sdk-10.0 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && dotnet --version
 
 # uv：官方多架构镜像
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
-
-# 设置 uv 的全局安装目录（避免使用 /root）
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 ENV UV_TOOL_DIR=/opt/uv/tools
 ENV UV_TOOL_BIN_DIR=/usr/local/bin
+ENV UV_CACHE_DIR=/home/vscode/.cache/uv
+ENV PIP_CACHE_DIR=/home/vscode/.cache/pip
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+RUN set -eux \
+    && uv --version
 
-# 创建目录并授权给 vscode 用户（即使当前是 root，也要为后续切换准备）
+# 创建目录
 RUN set -eux \
     && mkdir -p ${UV_PYTHON_INSTALL_DIR} ${UV_TOOL_DIR} \
     && chown -R vscode:vscode /opt/uv
 
 # Python：通过 uv 安装最新版本，并全局软链，这样全程只有一套 Python，工具链和临时脚本都能找到
 RUN set -eux \
-    && uv python install --python-preference only-managed \
+    && su vscode -c "\
+        set -eux \
+        && uv python install --python-preference only-managed \
+    "
+RUN set -eux \
     && PYTHON_DIR=$(dirname "$(uv python find --python-preference only-managed)") \
     && echo "Resolved Python dir: ${PYTHON_DIR}" \
     && ln -sf "${PYTHON_DIR}/python" /usr/local/bin/python \
@@ -103,23 +119,30 @@ RUN set -eux \
 
 # CMake / Ninja / cmake-format：通过 uv tool install（隔离虚拟环境）
 RUN set -eux \
-    && uv tool install cmake \
-    && uv tool install ninja \
-    && uv tool install cmakelang \
-    && uv tool install autoenv \
-    && uv tool install ruff
+    && su vscode -c "\
+        set -eux \
+        && uv tool install cmake \
+        && uv tool install ninja \
+        && uv tool install cmakelang \
+        && uv tool install autoenv \
+        && uv tool install ruff
+    "
 RUN set -eux \
     && python --version \
     && pip --version \
     && cmake --version \
     && ninja --version \
     && cmake-format --version \
-    && ruff --version
+    && ruff --version \
+    && su vscode -c "\
+        set -eux \
+        && cmake --version \
+        && ruff --version \
+    "
 
 # clang-format：用 LLVM 官方 apt 仓库（apt.llvm.org），版本号动态查询 GitHub 最新 release
 RUN set -eux \
     && apt-get update \
-    && apt-get install -yq --no-install-recommends lsb-release gnupg wget \
     && LLVM_LATEST=$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest \
          | grep -Po '"tag_name":\s*"llvmorg-\K[0-9]+') \
     && echo "Resolved latest LLVM major version: ${LLVM_LATEST}" \
@@ -134,44 +157,56 @@ RUN set -eux \
 
 # Microsoft OpenJDK：从 distroless 镜像拷贝，实际路径为 /usr/jdk
 # 保留 JDK 是为了运行第三方 Java 工具链（非本环境的格式化/开发核心）
-COPY --from=jdk-src /usr/jdk /usr/lib/jvm/msopenjdk-21
-
 ENV JAVA_HOME=/usr/lib/jvm/msopenjdk-21
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
+COPY --from=jdk-src /usr/jdk /usr/lib/jvm/msopenjdk-21
 RUN set -eux \
     && java --version
 
 # Node.js：多阶段拷贝，含 node-gyp 编译原生插件所需的头文件
 # 这里顺带使用 npm 安装 codegraph
-COPY --from=node-src /usr/local/include/node /usr/local/include/node
-COPY --from=node-src /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=node-src --chown=vscode:vscode /usr/local/include/node /usr/local/include/node
+COPY --from=node-src --chown=vscode:vscode /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=node-src /usr/local/bin/node /usr/local/bin/node
 RUN set -eux \
     && ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && if [ -d /usr/local/lib/node_modules/corepack ]; then \
         ln -sf /usr/local/lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack; \
-    fi \
-    && corepack enable \
-    && npm i -g @colbymchenry/codegraph \
-    && codegraph --version
+    fi
+RUN set -eux \
+    && su vscode -c "\
+        set -eux \
+        && corepack enable \
+        && npm --version \
+        && node --version \
+        && npm i -g @colbymchenry/codegraph \
+        && codegraph --version \
+    "
 
 # vcpkg：刷新注册表到最新
 # 用 fetch + checkout + reset 代替直接 git pull，兼容 detached HEAD 状态（官方基础镜像有时固定在某个 commit 而非分支）
-RUN set -eux \
-    && DEFAULT_BRANCH=$(git -C "${VCPKG_ROOT}" remote show origin | awk '/HEAD branch/ {print $NF}') \
-    && git -C "${VCPKG_ROOT}" fetch --quiet origin "${DEFAULT_BRANCH}" \
-    && git -C "${VCPKG_ROOT}" checkout --quiet "${DEFAULT_BRANCH}" \
-    && git -C "${VCPKG_ROOT}" reset --quiet --hard "origin/${DEFAULT_BRANCH}" \
-    && "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
-
-# 工具链缓存目录环境变量（与 devcontainer.json 的 bind mount 路径对应）
 ENV VCPKG_DOWNLOADS=/home/vscode/.cache/vcpkg/downloads
 ENV VCPKG_BINARY_SOURCES="clear;files,/home/vscode/.cache/vcpkg/archives,readwrite"
 ENV VCPKG_FEATURE_FLAGS=manifests,versions,binarycaching
-ENV UV_CACHE_DIR=/home/vscode/.cache/uv
-ENV PIP_CACHE_DIR=/home/vscode/.cache/pip
-ENV CCACHE_DIR=/home/vscode/.cache/ccache
+
+RUN chown -R vscode:vscode "${VCPKG_ROOT}"
+
+COPY <<'EOF' /tmp/refresh-vcpkg.sh
+#!/usr/bin/env bash
+set -eux
+DEFAULT_BRANCH=$(git -C "${VCPKG_ROOT}" remote show origin | awk '/HEAD branch/ {print $NF}')
+git -C "${VCPKG_ROOT}" fetch --quiet origin "${DEFAULT_BRANCH}"
+git -C "${VCPKG_ROOT}" checkout --quiet "${DEFAULT_BRANCH}"
+git -C "${VCPKG_ROOT}" reset --quiet --hard "origin/${DEFAULT_BRANCH}"
+"${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
+vcpkg --version
+EOF
+
+RUN set -eux \
+    && chmod +x /tmp/refresh-vcpkg.sh \
+    && su vscode -c /tmp/refresh-vcpkg.sh \
+    && rm -f /tmp/refresh-vcpkg.sh
 
 #-----------------------------------------------------
 # 个人配置文件：母版统一放在 ~/.format/，作为唯一数据源
@@ -180,7 +215,6 @@ ENV CCACHE_DIR=/home/vscode/.cache/ccache
 # - clang-format 模板放在 ~/default.clang-format，供开发者手动复制到项目目录
 #-----------------------------------------------------
 COPY --chown=vscode:vscode .format/ /home/vscode/.format/
-
 RUN set -eux \
     && ln -sf /home/vscode/.format/.vimrc /home/vscode/.vimrc \
     && chown -h vscode:vscode /home/vscode/.vimrc \
@@ -209,14 +243,23 @@ RUN set -eux \
         /home/vscode/.m2 \
         /home/vscode/.gradle \
         /home/vscode/.vscode-server
+RUN set -eux \
+    && chown -R vscode:vscode /opt/uv
 
 # [Optional] 预装 vcpkg 端口（manifest 模式项目一般不需要这里预装）
 # RUN set -eux \
 #     && su vscode -c "${VCPKG_ROOT}/vcpkg install <your-port-name-here>"
 
+RUN su vscode -c '\
+        set -eux \
+        && echo "PATH=$PATH" \
+        && echo "VCPKG_ROOT=$VCPKG_ROOT" \
+    '
+
 RUN set -eux \
     && mkdir -p /home/vscode/workspace \
     && chown vscode:vscode /home/vscode/workspace
+
 USER vscode
 
 # 保持容器前台运行，避免启动后立即退出，这样 docker run -d 无需额外指定命令
