@@ -263,9 +263,39 @@ RUN set -eux \
         /home/vscode/.gradle \
         /home/vscode/.vscode-server
 
-# [Optional] 预装 vcpkg 端口（manifest 模式项目一般不需要这里预装）
-# RUN set -eux \
-#     && su vscode -c "${VCPKG_ROOT}/vcpkg install <your-port-name-here>"
+# 预装项目所需的所有 C++ 依赖库（静态库，支持 x64 和 arm64 交叉编译）
+RUN set -eux \
+    && su vscode -c "\
+        set -eux \
+        && vcpkg install \
+            openssl:x64-linux openssl:arm64-linux \
+            pugixml:x64-linux pugixml:arm64-linux \
+            yaml-cpp:x64-linux yaml-cpp:arm64-linux \
+            fmt:x64-linux fmt:arm64-linux \
+            spdlog:x64-linux spdlog:arm64-linux \
+            libzip:x64-linux libzip:arm64-linux \
+            opus:x64-linux opus:arm64-linux \
+            libusb:x64-linux libusb:arm64-linux \
+            libhv:x64-linux libhv:arm64-linux \
+            paho-mqtt:x64-linux paho-mqtt:arm64-linux \
+            paho-mqttpp3:x64-linux paho-mqttpp3:arm64-linux \
+            abseil:x64-linux abseil:arm64-linux \
+            asio:x64-linux asio:arm64-linux \
+            cli11:x64-linux cli11:arm64-linux \
+            eventpp:x64-linux eventpp:arm64-linux \
+            cpp-httplib:x64-linux cpp-httplib:arm64-linux \
+            range-v3:x64-linux range-v3:arm64-linux \
+            cereal:x64-linux cereal:arm64-linux \
+            microsoft-gsl:x64-linux microsoft-gsl:arm64-linux \
+            tl-expected:x64-linux tl-expected:arm64-linux \
+            nlohmann-json:x64-linux nlohmann-json:arm64-linux \
+            gtest:x64-linux gtest:arm64-linux \
+            benchmark:x64-linux benchmark:arm64-linux \
+            yalantinglibs:x64-linux yalantinglibs:arm64-linux \
+            re2:x64-linux re2:arm64-linux \
+            gflags:x64-linux gflags:arm64-linux \
+            sqlite3:x64-linux sqlite3:arm64-linux \
+        "
 
 # 工作目录及最终用户切换
 RUN su vscode -c '\
