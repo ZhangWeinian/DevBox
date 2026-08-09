@@ -26,6 +26,7 @@ RUN set -eux \
         libboost-all-dev \
         libssl-dev \
         libgl-dev \
+        bash \
         sudo \
         curl \
         zip \
@@ -58,13 +59,15 @@ RUN set -eux \
         iproute2 \
         dnsutils \
         iputils-ping \ 
+        openssl \
         gcc-aarch64-linux-gnu \
         g++-aarch64-linux-gnu \
         binutils-aarch64-linux-gnu \
         libc6-dev-arm64-cross \
         libusb \
     && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && exit 0
 
 # 安装 .NET 10 LTS
 RUN set -eux \
@@ -73,7 +76,8 @@ RUN set -eux \
     && rm packages-microsoft-prod.deb \
     && apt-get update \
     && apt-get install -yq dotnet-sdk-10.0 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && exit 0
 
 # uv：官方多架构镜像
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
@@ -86,7 +90,8 @@ ENV UV_TOOL_BIN_DIR=/usr/local/bin
 # 创建目录并授权给 vscode 用户（即使当前是 root，也要为后续切换准备）
 RUN set -eux \
     && mkdir -p ${UV_PYTHON_INSTALL_DIR} ${UV_TOOL_DIR} \
-    && chown -R vscode:vscode /opt/uv
+    && chown -R vscode:vscode /opt/uv \
+    && exit 0
 
 # Python：通过 uv 安装最新版本，并全局软链，这样全程只有一套 Python，工具链和临时脚本都能找到
 RUN set -eux \
@@ -96,7 +101,8 @@ RUN set -eux \
     && ln -sf "${PYTHON_DIR}/python" /usr/local/bin/python \
     && ln -sf "${PYTHON_DIR}/python3" /usr/local/bin/python3 \
     && ln -sf "${PYTHON_DIR}/pip" /usr/local/bin/pip \
-    && ln -sf "${PYTHON_DIR}/pip3" /usr/local/bin/pip3
+    && ln -sf "${PYTHON_DIR}/pip3" /usr/local/bin/pip3 \
+    && exit 0
 
 # CMake / Ninja / cmake-format：通过 uv tool install（隔离虚拟环境）
 RUN set -eux \
@@ -104,14 +110,16 @@ RUN set -eux \
     && uv tool install ninja \
     && uv tool install cmakelang \
     && uv tool install autoenv \
-    && uv tool install ruff
+    && uv tool install ruff \
+    && exit 0
 RUN set -eux \
     && python --version \
     && pip --version \
     && cmake --version \
     && ninja --version \
     && cmake-format --version \
-    && ruff --version
+    && ruff --version \
+    && exit 0
 
 # clang-format：用 LLVM 官方 apt 仓库（apt.llvm.org），版本号动态查询 GitHub 最新 release
 RUN set -eux \
@@ -127,7 +135,8 @@ RUN set -eux \
     && ln -sf "/usr/bin/clang-format-${LLVM_LATEST}" /usr/local/bin/clang-format \
     && rm -f /tmp/llvm.sh \
     && rm -rf /var/lib/apt/lists/* \
-    && clang-format --version
+    && clang-format --version \
+    && exit 0
 
 # Microsoft OpenJDK：从 distroless 镜像拷贝，实际路径为 /usr/jdk
 # 保留 JDK 是为了运行第三方 Java 工具链（非本环境的格式化/开发核心）
@@ -136,7 +145,8 @@ COPY --from=jdk-src /usr/jdk /usr/lib/jvm/msopenjdk-21
 ENV JAVA_HOME=/usr/lib/jvm/msopenjdk-21
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 RUN set -eux \
-    && java --version
+    && java --version \
+    && exit 0
 
 # Node.js：多阶段拷贝，含 node-gyp 编译原生插件所需的头文件
 # 这里顺带使用 npm 安装 codegraph
@@ -151,7 +161,8 @@ RUN set -eux \
     fi \
     && corepack enable \
     && npm i -g @colbymchenry/codegraph \
-    && codegraph --version
+    && codegraph --version \
+    && exit 0
 
 # vcpkg：刷新注册表到最新
 # 用 fetch + checkout + reset 代替直接 git pull，兼容 detached HEAD 状态（官方基础镜像有时固定在某个 commit 而非分支）
@@ -160,7 +171,8 @@ RUN set -eux \
     && git -C "${VCPKG_ROOT}" fetch --quiet origin "${DEFAULT_BRANCH}" \
     && git -C "${VCPKG_ROOT}" checkout --quiet "${DEFAULT_BRANCH}" \
     && git -C "${VCPKG_ROOT}" reset --quiet --hard "origin/${DEFAULT_BRANCH}" \
-    && "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
+    && "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics \
+    && exit 0
 
 # 工具链缓存目录环境变量（与 devcontainer.json 的 bind mount 路径对应）
 ENV VCPKG_DOWNLOADS=/home/vscode/.cache/vcpkg/downloads
@@ -182,7 +194,8 @@ RUN set -eux \
     && ln -sf /home/vscode/.format/.vimrc /home/vscode/.vimrc \
     && chown -h vscode:vscode /home/vscode/.vimrc \
     && ln -sf /home/vscode/.format/.clang-format /home/vscode/default.clang-format \
-    && chown -h vscode:vscode /home/vscode/default.clang-format
+    && chown -h vscode:vscode /home/vscode/default.clang-format \
+    && exit 0
 
 # 预创建全部缓存目录并授权 vscode 用户
 # 无论后续被 bind mount 覆盖，还是在冻结导出时被 COPY 填充，权限保持一致
@@ -205,7 +218,8 @@ RUN set -eux \
         /home/vscode/.local \
         /home/vscode/.m2 \
         /home/vscode/.gradle \
-        /home/vscode/.vscode-server
+        /home/vscode/.vscode-server \
+    && exit 0
 
 # [Optional] 预装 vcpkg 端口（manifest 模式项目一般不需要这里预装）
 # RUN set -eux \
@@ -213,7 +227,8 @@ RUN set -eux \
 
 RUN set -eux \
     && mkdir -p /home/vscode/workspace \
-    && chown vscode:vscode /home/vscode/workspace
+    && chown vscode:vscode /home/vscode/workspace \
+    && exit 0
 USER vscode
 
 # 保持容器前台运行，避免启动后立即退出，这样 docker run -d 无需额外指定命令
