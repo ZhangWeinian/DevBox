@@ -54,6 +54,7 @@ RUN set -eux \
         autoconf \
         automake \
         libtool \
+        autoconf-archive \
         jq \
         tree \
         htop \
@@ -264,7 +265,7 @@ RUN set -eux \
         /home/vscode/.vscode-server
 
 # 预装项目所需的所有 C++ 依赖库（静态库，支持 x64 和 arm64 交叉编译）
-RUN set -eux \
+RUN --mount=type=cache,target=/home/vscode/.cache/vcpkg,id=vcpkg-cache set -eux \
     && su vscode -c "\
         set -eux \
         && vcpkg install \
