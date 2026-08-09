@@ -267,7 +267,9 @@ RUN set -eux \
         /home/vscode/.vscode-server
 
 # 预装项目所需的所有 C++ 依赖库（静态库，支持 x64 和 arm64 交叉编译）
-RUN --mount=type=cache,target=/home/vscode/.cache/vcpkg,id=vcpkg-cache set -eux \
+RUN --mount=type=cache,target=/home/vscode/.cache/vcpkg,id=vcpkg-cache,uid=1000,gid=1000 set -eux \
+    && mkdir -p /home/vscode/.cache/vcpkg/downloads /home/vscode/.cache/vcpkg/archives \
+    && chown -R vscode:vscode /home/vscode/.cache/vcpkg \
     && su vscode -c "\
         set -eux \
         && vcpkg install \
