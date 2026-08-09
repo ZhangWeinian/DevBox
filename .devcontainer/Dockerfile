@@ -286,7 +286,7 @@ RUN set -eux \
             cpp-httplib:x64-linux cpp-httplib:arm64-linux \
             range-v3:x64-linux range-v3:arm64-linux \
             cereal:x64-linux cereal:arm64-linux \
-            microsoft-gsl:x64-linux microsoft-gsl:arm64-linux \
+            gsl:x64-linux gsl:arm64-linux \
             tl-expected:x64-linux tl-expected:arm64-linux \
             nlohmann-json:x64-linux nlohmann-json:arm64-linux \
             gtest:x64-linux gtest:arm64-linux \
