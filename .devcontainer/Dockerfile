@@ -125,7 +125,7 @@ RUN set -eux \
         && uv tool install ninja \
         && uv tool install cmakelang \
         && uv tool install autoenv \
-        && uv tool install ruff
+        && uv tool install ruff \
     "
 RUN set -eux \
     && python --version \
