@@ -45,6 +45,7 @@ RUN set -eux \
         gdb \
         ccache \
         libudev-dev \
+        libudev-dev:arm64 \
         libbz2-dev \
         libzstd-dev \
         zlib1g-dev \
