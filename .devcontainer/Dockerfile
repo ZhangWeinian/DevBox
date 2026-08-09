@@ -269,7 +269,7 @@ RUN --mount=type=cache,target=/home/vscode/.cache/vcpkg,id=vcpkg-cache set -eux 
     && su vscode -c "\
         set -eux \
         && export PATH=/usr/local/bin:\$PATH \
-        && export NINJA=/usr/local/bin/ninja \
+        && export VCPKG_NINJA_PATH=/usr/local/bin/ninja \
         && vcpkg install \
             openssl:x64-linux openssl:arm64-linux \
             pugixml:x64-linux pugixml:arm64-linux \
