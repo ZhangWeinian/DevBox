@@ -73,6 +73,21 @@ RUN set -eux \
         libusb-1.0-0-dev \
         lsb-release \
         gnupg \
+        strace \
+        ltrace \
+        valgrind \
+        sysstat \
+        iotop \
+        iftop \
+        telnet \
+        netcat-openbsd \
+        mtr \
+        sqlite3 \
+        fzf \
+        bat \
+        eza \
+        yq \
+        nc \
     && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p "${CCACHE_DIR}" \
