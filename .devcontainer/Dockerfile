@@ -26,6 +26,7 @@ ENV USE_CCACHE=1
 ENV CCACHE_SLOPPINESS=file_macro,include_file_mtime,time_macros
 ENV CCACHE_UMASK=002
 RUN set -eux \
+    && dpkg --add-architecture arm64 \
     && apt-get update \
     && apt-get -yq upgrade \
     && apt-get -yq install --no-install-recommends \
