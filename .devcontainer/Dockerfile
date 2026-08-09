@@ -213,7 +213,7 @@ RUN set -eux \
 ENV VCPKG_DOWNLOADS=/home/vscode/.cache/vcpkg/downloads
 ENV VCPKG_BINARY_SOURCES="clear;files,/home/vscode/.cache/vcpkg/archives,readwrite"
 ENV VCPKG_FEATURE_FLAGS=manifests,versions,binarycaching
-ENV VCPKG_NINJA_PATH=/usr/bin/ninja
+ENV VCPKG_FORCE_SYSTEM_BINARIES=1
 
 # 立即创建 vcpkg 缓存目录并授权
 RUN set -eux \
