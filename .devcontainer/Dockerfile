@@ -87,7 +87,6 @@ RUN set -eux \
         bat \
         eza \
         yq \
-        nc \
     && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p "${CCACHE_DIR}" \
