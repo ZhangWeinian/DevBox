@@ -18,9 +18,9 @@ FULL_IMAGE="${IMAGE_NAME}:${TAG}"
 CONTAINER_NAME="dev-container"
 
 # 持久化缓存卷清单
-# 这里列出的每一项，都会被挂载为一个"具名卷"（named volume），=。具名卷独立于
-# image tag 存在，重新 build/import 新镜像时会自动复用旧卷内容，实现
-# "镜像随便重建，缓存持续累积"的效果
+# 这里列出的每一项，都会被挂载为一个"具名卷"（named volume），而不是随镜像一起
+# 打包/销毁的普通容器层。具名卷独立于 image tag 存在，重新 build/import 新镜像
+# 时会自动复用旧卷内容，实现"镜像随便重建，缓存持续累积"的效果
 #
 # 原理：具名卷第一次挂载到某路径时，若镜像该路径已有内容，Docker 会自动把镜像
 # 内容复制进卷（首次自动预热）；若卷已有内容（不是第一次），则直接使用卷内容，
@@ -56,7 +56,9 @@ show_help() {
   容器名称固定为 ${CONTAINER_NAME}
   如果指定了 tar 包，则强制从 tar 加载，覆盖本地同名镜像。
   如果未指定 tar，则使用本地镜像，若不存在则报错。
-  默认挂载目录为 ~/workspace（不存在则自动创建）。
+  默认挂载目录为 ~/workspace（不存在则自动创建），
+  此时直接对应容器内 ~/workspace（不嵌套子目录）；
+  若指定自定义目录，则以子目录形式挂载到容器内 ~/workspace/<目录名> 下。
 
   持久化缓存卷（跨镜像重建保留，不受 docker build / docker rmi 影响）:
 EOF
@@ -124,15 +126,26 @@ else
 fi
 
 # 处理挂载目录
+USED_DEFAULT_MOUNT_DIR=0
 if [ -z "${MOUNT_DIR}" ]; then
     MOUNT_DIR="${HOME}/workspace"
     mkdir -p "${MOUNT_DIR}"
     echo "==> 未指定挂载目录，使用默认目录: ${MOUNT_DIR}"
+    USED_DEFAULT_MOUNT_DIR=1
 fi
 
+# 将挂载目录转为绝对路径（如果失败则退出）
 if ! MOUNT_DIR="$(cd "${MOUNT_DIR}" 2>/dev/null && pwd)"; then
     echo "错误: 无法解析目录 '${MOUNT_DIR}'"
     exit 1
+fi
+
+# 计算容器内挂载目标
+if [ "${USED_DEFAULT_MOUNT_DIR}" -eq 1 ]; then
+    CONTAINER_TARGET="/home/vscode/workspace"
+else
+    MOUNT_BASENAME=$(basename "${MOUNT_DIR}")
+    CONTAINER_TARGET="/home/vscode/workspace/${MOUNT_BASENAME}"
 fi
 
 # 处理 tar 包（高优先级）
@@ -142,12 +155,14 @@ if [ -n "${TAR_FILE}" ]; then
         exit 1
     fi
 
+    # 强制清理：停止并删除现有容器
     if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         echo "==> 停止并删除容器 ${CONTAINER_NAME}"
         docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
         docker rm "${CONTAINER_NAME}" >/dev/null 2>&1 || true
     fi
 
+    # 删除旧镜像（如果有）
     if docker image inspect "${FULL_IMAGE}" >/dev/null 2>&1; then
         echo "==> 删除旧镜像 ${FULL_IMAGE}"
         docker rmi -f "${FULL_IMAGE}" >/dev/null 2>&1
@@ -178,16 +193,20 @@ if [ "${IMAGE_ARCH}" != "${HOST_ARCH}" ] && [ "${ALLOW_ARCH_MISMATCH}" -eq 0 ]; 
     echo "错误: 镜像架构与宿主机架构不一致，已阻止启动" >&2
     echo "  镜像架构:   ${IMAGE_ARCH}" >&2
     echo "  宿主机架构: ${HOST_ARCH}（uname -m: ${HOST_ARCH_RAW}）" >&2
-    echo "  如需强制运行（依赖 QEMU 模拟），请加 --allow-arch-mismatch" >&2
+    echo "" >&2
+    echo "  该镜像目前只支持在 ${IMAGE_ARCH} 宿主机上原生运行。" >&2
+    echo "  如果确认已启用 QEMU 跨架构模拟（Docker Desktop 默认启用，" >&2
+    echo "  纯 Linux 需自行安装 qemu-user-static 并注册 binfmt handler），" >&2
+    echo "  可加 --allow-arch-mismatch 参数跳过此检查强制运行（速度会明显变慢）。" >&2
     echo "==============================================" >&2
     exit 1
-elif [ "${IMAGE_ARCH}" != "${HOST_ARCH}" ]; then
-    echo "==> 警告: 镜像架构(${IMAGE_ARCH}) 与宿主机架构(${HOST_ARCH}) 不一致，已跳过检查，将依赖 QEMU 模拟运行" >&2
+elif [ "${IMAGE_ARCH}" != "${HOST_ARCH}" ] && [ "${ALLOW_ARCH_MISMATCH}" -eq 1 ]; then
+    echo "==> 警告: 镜像架构(${IMAGE_ARCH}) 与宿主机架构(${HOST_ARCH}) 不一致，" >&2
+    echo "    已通过 --allow-arch-mismatch 跳过检查，将依赖 QEMU 模拟运行，性能会明显下降" >&2
 fi
 
-# 删除可能遗留的旧容器
-# 注意：这里只删容器和上面的镜像，不涉及缓存卷
-# 缓存卷是独立的持久化资源，不会因为容器/镜像的增删而丢失
+# 删除可能遗留的旧容器，这里只删容器和上面的镜像，不涉及缓存卷，缓存卷是独立的持久化资源
+# 不会因为容器/镜像的增删而丢失
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     echo "==> 停止并删除旧容器: ${CONTAINER_NAME}"
     docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
@@ -209,10 +228,6 @@ if [ "${RESET_CACHE}" -eq 1 ]; then
     done
 fi
 
-# 提取挂载目录的最后一个文件夹名
-MOUNT_BASENAME=$(basename "${MOUNT_DIR}")
-CONTAINER_TARGET="/home/vscode/workspace/${MOUNT_BASENAME}"
-
 # 组装 docker run 参数：工作区 bind mount + 全部持久化缓存卷
 DOCKER_RUN_ARGS=(
     -d
@@ -221,7 +236,7 @@ DOCKER_RUN_ARGS=(
     -v "${MOUNT_DIR}:${CONTAINER_TARGET}"
 )
 
-echo "==> 挂载持久化缓存卷："
+echo "==> 挂载持久化缓存卷（独立于镜像生命周期，跨 build/import 保留）："
 for spec in "${CACHE_VOLUME_SPECS[@]}"; do
     suffix="${spec%%:*}"
     path="${spec#*:}"
@@ -235,11 +250,10 @@ echo "    挂载宿主机目录: ${MOUNT_DIR} -> ${CONTAINER_TARGET}"
 
 docker run "${DOCKER_RUN_ARGS[@]}" "${FULL_IMAGE}"
 
-# 修复权限：部分缓存目录（尤其 vcpkg，其内容原本产生于构建期的
-# BuildKit cache mount，并未真正提交进镜像文件系统层）在具名卷首次
-# 挂载时可能被 Docker 以 root 身份自动创建挂载点，导致以 vscode 身份
-# 运行的进程无法写入。这里统一补一次 chown，幂等、开销极小，
-# 无论首次挂载具体行为如何都能保证权限正确。
+# 修复权限：
+# 部分缓存目录在具名卷首次挂载时可能被 Docker 以 root 身份自动创建挂载点
+# 导致以 vscode 身份运行的进程无法写入。这里统一补一次 chown
+# 无论首次挂载具体行为如何都能保证权限正确
 echo "==> 校正缓存目录权限"
 CACHE_PATHS=()
 for spec in "${CACHE_VOLUME_SPECS[@]}"; do
