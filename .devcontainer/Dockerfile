@@ -10,6 +10,17 @@ FROM mcr.microsoft.com/openjdk/jdk:${JDK_MAJOR_VERSION}-distroless AS jdk-src
 # Node.js LTS ，务必用 Debian 系变体（默认即是），不要用 -alpine ：musl 与基础镜像 glibc 不兼容
 FROM node:${NODE_VARIANT} AS node-src
 
+# 防御性检测：此镜像的交叉编译工具链 / vcpkg triplet 均按 amd64 宿主机硬编码
+# 若基础镜像被解析为非 amd64（例如在 arm64 宿主机上未加 --platform 直接构建）
+# 立即报错终止，避免后续在 vcpkg 阶段才出现难以定位的失败
+RUN set -eux \
+    && ARCH="$(dpkg --print-architecture)" \
+    && if [ "${ARCH}" != "amd64" ]; then \
+        echo "FATAL: 此 Dockerfile 仅支持 amd64 基础镜像构建，检测到当前架构为 ${ARCH}" >&2; \
+        echo "请在 x86_64 宿主机上构建，或使用 --platform linux/amd64 强制模拟" >&2; \
+        exit 1; \
+    fi
+
 # 主阶段
 FROM mcr.microsoft.com/devcontainers/cpp:3-debian13
 
@@ -20,6 +31,7 @@ RUN chown vscode:vscode /usr/local/bin
 # 含 python3（确保 uv pip install --system 不依赖 Feature 执行顺序）
 # 含 ccache（C/C++ 编译加速）
 # 含 fd-find（Debian 包名，实际二进制为 fdfind，下方补 fd 软链）
+# 含 arm64 multiarch 支持（libudev-dev:arm64，供交叉编译 libusb 等需要探测系统库的 port 使用）
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CCACHE_DIR=/home/vscode/.cache/ccache
 ENV USE_CCACHE=1
@@ -210,41 +222,10 @@ RUN set -eux \
         && codegraph --version \
     "
 
-# vcpkg：刷新注册表到最新
-# 用 fetch + checkout + reset 代替直接 git pull，兼容 detached HEAD 状态（官方基础镜像有时固定在某个 commit 而非分支）
-ENV VCPKG_DOWNLOADS=/home/vscode/.cache/vcpkg/downloads
-ENV VCPKG_BINARY_SOURCES="clear;files,/home/vscode/.cache/vcpkg/archives,readwrite"
-ENV VCPKG_FEATURE_FLAGS=manifests,versions,binarycaching
-ENV VCPKG_FORCE_SYSTEM_BINARIES=1
-
-# 立即创建 vcpkg 缓存目录并授权
-RUN set -eux \
-    && mkdir -p /home/vscode/.cache/vcpkg/downloads /home/vscode/.cache/vcpkg/archives \
-    && chown -R vscode:vscode /home/vscode/.cache/vcpkg \
-    && chown -R vscode:vscode "${VCPKG_ROOT}"
-
-COPY <<'EOF' /tmp/refresh-vcpkg.sh
-#!/usr/bin/env bash
-set -eux
-DEFAULT_BRANCH=$(git -C "${VCPKG_ROOT}" remote show origin | awk '/HEAD branch/ {print $NF}')
-git -C "${VCPKG_ROOT}" fetch --quiet origin "${DEFAULT_BRANCH}"
-git -C "${VCPKG_ROOT}" checkout --quiet "${DEFAULT_BRANCH}"
-git -C "${VCPKG_ROOT}" reset --quiet --hard "origin/${DEFAULT_BRANCH}"
-"${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
-vcpkg --version
-EOF
-
-RUN set -eux \
-    && chmod +x /tmp/refresh-vcpkg.sh \
-    && su vscode -c /tmp/refresh-vcpkg.sh \
-    && rm -f /tmp/refresh-vcpkg.sh
-
-#-----------------------------------------------------
 # 个人配置文件：母版统一放在 ~/.format/，作为唯一数据源
 # - .vimrc：vim 固定读取 ~/.vimrc，单独软链
 # - 其余五个文件均通过 devcontainer.json 中各扩展的绝对路径设置直接引用
 # - clang-format 模板放在 ~/default.clang-format，供开发者手动复制到项目目录
-#-----------------------------------------------------
 COPY --chown=vscode:vscode .format/ /home/vscode/.format/
 RUN set -eux \
     && ln -sf /home/vscode/.format/.vimrc /home/vscode/.vimrc \
@@ -268,46 +249,52 @@ RUN set -eux \
         /home/vscode/.gradle \
         /home/vscode/.vscode-server
 
-# 预装项目所需的所有 C++ 依赖库（静态库，支持 x64 和 arm64 交叉编译）
+# vcpkg：manifest 模式
+# builtin-baseline 在每次构建时动态探测
+# vcpkg registry 当前最新 commit 并即时生成，从而保证：
+#   - vcpkg 本体（工具）是最新的
+#   - 依赖版本解析（baseline）是最新的
+#   - 实际安装的库版本是最新的
+# 三者始终对应同一次构建时刻，不存在割裂
+ENV VCPKG_DOWNLOADS=/home/vscode/.cache/vcpkg/downloads
+ENV VCPKG_BINARY_SOURCES="clear;files,/home/vscode/.cache/vcpkg/archives,readwrite"
+ENV VCPKG_FEATURE_FLAGS=manifests,versions,binarycaching
+ENV VCPKG_FORCE_SYSTEM_BINARIES=1
+
+COPY vcpkg.json.in /home/vscode/.vcpkg-manifest/vcpkg.json.in
+
+COPY <<'EOF' /tmp/build-vcpkg-deps.sh
+#!/usr/bin/env bash
+set -eux
+
+# 刷新 vcpkg 本体到当前默认分支最新 commit
+# 用 fetch + checkout + reset 代替直接 git pull，兼容 detached HEAD 状态
+DEFAULT_BRANCH=$(git -C "${VCPKG_ROOT}" remote show origin | awk '/HEAD branch/ {print $NF}')
+git -C "${VCPKG_ROOT}" fetch --quiet origin "${DEFAULT_BRANCH}"
+git -C "${VCPKG_ROOT}" checkout --quiet "${DEFAULT_BRANCH}"
+git -C "${VCPKG_ROOT}" reset --quiet --hard "origin/${DEFAULT_BRANCH}"
+"${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
+vcpkg --version
+
+# 用当前 HEAD 的 commit sha 作为 builtin-baseline，动态生成 vcpkg.json
+BASELINE=$(git -C "${VCPKG_ROOT}" rev-parse HEAD)
+echo "==> Resolved latest vcpkg builtin-baseline: ${BASELINE}"
+jq --arg baseline "${BASELINE}" '.["builtin-baseline"] = $baseline' \
+    /home/vscode/.vcpkg-manifest/vcpkg.json.in > /home/vscode/.vcpkg-manifest/vcpkg.json
+cat /home/vscode/.vcpkg-manifest/vcpkg.json
+
+# 按 manifest 安装依赖（两个 triplet 各跑一次）
+cd /home/vscode/.vcpkg-manifest
+vcpkg install --triplet x64-linux   --x-install-root=/home/vscode/.vcpkg-manifest/vcpkg_installed
+vcpkg install --triplet arm64-linux --x-install-root=/home/vscode/.vcpkg-manifest/vcpkg_installed
+EOF
+
 RUN --mount=type=cache,target=/home/vscode/.cache/vcpkg,id=vcpkg-cache,uid=1000,gid=1000 set -eux \
+    && chmod +x /tmp/build-vcpkg-deps.sh \
     && mkdir -p /home/vscode/.cache/vcpkg/downloads /home/vscode/.cache/vcpkg/archives \
-    && chown -R vscode:vscode /home/vscode/.cache/vcpkg \
-    && su vscode -c "\
-        set -eux \
-        && vcpkg install \
-            boost:x64-linux boost:arm64-linux \
-            openssl:x64-linux openssl:arm64-linux \
-            pugixml:x64-linux pugixml:arm64-linux \
-            yaml-cpp:x64-linux yaml-cpp:arm64-linux \
-            fmt:x64-linux fmt:arm64-linux \
-            spdlog:x64-linux spdlog:arm64-linux \
-            libzip:x64-linux libzip:arm64-linux \
-            opus:x64-linux opus:arm64-linux \
-            libusb:x64-linux libusb:arm64-linux \
-            libhv:x64-linux libhv:arm64-linux \
-            paho-mqtt:x64-linux paho-mqtt:arm64-linux \
-            paho-mqttpp3:x64-linux paho-mqttpp3:arm64-linux \
-            abseil:x64-linux abseil:arm64-linux \
-            asio:x64-linux asio:arm64-linux \
-            cli11:x64-linux cli11:arm64-linux \
-            eventpp:x64-linux eventpp:arm64-linux \
-            cpp-httplib:x64-linux cpp-httplib:arm64-linux \
-            range-v3:x64-linux range-v3:arm64-linux \
-            cereal:x64-linux cereal:arm64-linux \
-            gsl:x64-linux gsl:arm64-linux \
-            tl-expected:x64-linux tl-expected:arm64-linux \
-            nlohmann-json:x64-linux nlohmann-json:arm64-linux \
-            gtest:x64-linux gtest:arm64-linux \
-            benchmark:x64-linux benchmark:arm64-linux \
-            yalantinglibs:x64-linux yalantinglibs:arm64-linux \
-            re2:x64-linux re2:arm64-linux \
-            gflags:x64-linux gflags:arm64-linux \
-            sqlite3:x64-linux sqlite3:arm64-linux \
-            slick-net:x64-linux slick-net:arm64-linux \
-            drogon:x64-linux drogon:arm64-linux \
-            neko-network:x64-linux neko-network:arm64-linux \
-            oatpp-curl:x64-linux oatpp-curl:arm64-linux \
-        "
+    && chown -R vscode:vscode /home/vscode/.cache/vcpkg "${VCPKG_ROOT}" /home/vscode/.vcpkg-manifest \
+    && su vscode -c /tmp/build-vcpkg-deps.sh \
+    && rm -f /tmp/build-vcpkg-deps.sh
 
 # 工作目录及最终用户切换
 RUN su vscode -c '\
