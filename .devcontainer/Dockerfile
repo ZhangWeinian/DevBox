@@ -268,9 +268,15 @@ COPY <<'EOF' /tmp/build-vcpkg-deps.sh
 set -eux
 
 # 刷新 vcpkg 本体到当前默认分支最新 commit
-# 用 fetch + checkout + reset 代替直接 git pull，兼容 detached HEAD 状态
 DEFAULT_BRANCH=$(git -C "${VCPKG_ROOT}" remote show origin | awk '/HEAD branch/ {print $NF}')
-git -C "${VCPKG_ROOT}" fetch --quiet origin "${DEFAULT_BRANCH}"
+
+if git -C "${VCPKG_ROOT}" rev-parse --is-shallow-repository | grep -q true; then
+    echo "==> Detected shallow vcpkg clone, unshallowing..."
+    git -C "${VCPKG_ROOT}" fetch --quiet --unshallow origin "${DEFAULT_BRANCH}"
+else
+    git -C "${VCPKG_ROOT}" fetch --quiet origin "${DEFAULT_BRANCH}"
+fi
+
 git -C "${VCPKG_ROOT}" checkout --quiet "${DEFAULT_BRANCH}"
 git -C "${VCPKG_ROOT}" reset --quiet --hard "origin/${DEFAULT_BRANCH}"
 "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
