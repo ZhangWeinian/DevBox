@@ -17,18 +17,16 @@ TAG="latest"
 FULL_IMAGE="${IMAGE_NAME}:${TAG}"
 CONTAINER_NAME="dev-container"
 
-#-----------------------------------------------------------------------------
 # 持久化缓存卷清单
-# 这里列出的每一项，都会被挂载为一个"具名卷"（named volume），而不是随镜像一起
-# 打包/销毁的普通容器层。具名卷独立于 image tag 存在，重新 build/import 新镜像
-# 时会自动复用旧卷内容，实现"镜像随便重建，缓存持续累积"的效果。
+# 这里列出的每一项，都会被挂载为一个"具名卷"（named volume），=。具名卷独立于
+# image tag 存在，重新 build/import 新镜像时会自动复用旧卷内容，实现
+# "镜像随便重建，缓存持续累积"的效果
 #
 # 原理：具名卷第一次挂载到某路径时，若镜像该路径已有内容，Docker 会自动把镜像
 # 内容复制进卷（首次自动预热）；若卷已有内容（不是第一次），则直接使用卷内容，
-# 不会被镜像覆盖（持续累积，新旧共存）。
+# 不会被镜像覆盖（持续累积，新旧共存）
 #
 # 格式："<卷名后缀>:<容器内绝对路径>"，卷的实际名称为 "${IMAGE_NAME}-cache-<后缀>"
-#-----------------------------------------------------------------------------
 CACHE_VOLUME_SPECS=(
     "vcpkg:/home/vscode/.cache/vcpkg"
     "uv:/home/vscode/.cache/uv"
@@ -180,15 +178,16 @@ if [ "${IMAGE_ARCH}" != "${HOST_ARCH}" ] && [ "${ALLOW_ARCH_MISMATCH}" -eq 0 ]; 
     echo "错误: 镜像架构与宿主机架构不一致，已阻止启动" >&2
     echo "  镜像架构:   ${IMAGE_ARCH}" >&2
     echo "  宿主机架构: ${HOST_ARCH}（uname -m: ${HOST_ARCH_RAW}）" >&2
-    echo "  如需强制运行（依赖 QEMU 模拟，速度明显变慢），请加 --allow-arch-mismatch" >&2
+    echo "  如需强制运行（依赖 QEMU 模拟），请加 --allow-arch-mismatch" >&2
     echo "==============================================" >&2
     exit 1
 elif [ "${IMAGE_ARCH}" != "${HOST_ARCH}" ]; then
     echo "==> 警告: 镜像架构(${IMAGE_ARCH}) 与宿主机架构(${HOST_ARCH}) 不一致，已跳过检查，将依赖 QEMU 模拟运行" >&2
 fi
 
-# 删除可能遗留的旧容器（注意：这里只删容器和上面的镜像，不涉及缓存卷，
-# 缓存卷是独立的持久化资源，不会因为容器/镜像的增删而丢失）
+# 删除可能遗留的旧容器
+# 注意：这里只删容器和上面的镜像，不涉及缓存卷
+# 缓存卷是独立的持久化资源，不会因为容器/镜像的增删而丢失
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     echo "==> 停止并删除旧容器: ${CONTAINER_NAME}"
     docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
@@ -222,7 +221,7 @@ DOCKER_RUN_ARGS=(
     -v "${MOUNT_DIR}:${CONTAINER_TARGET}"
 )
 
-echo "==> 挂载持久化缓存卷（独立于镜像生命周期，跨 build/import 保留）："
+echo "==> 挂载持久化缓存卷："
 for spec in "${CACHE_VOLUME_SPECS[@]}"; do
     suffix="${spec%%:*}"
     path="${spec#*:}"
