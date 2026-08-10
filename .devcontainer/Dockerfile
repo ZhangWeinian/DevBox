@@ -275,6 +275,7 @@ RUN --mount=type=cache,target=/home/vscode/.cache/vcpkg,id=vcpkg-cache,uid=1000,
     && su vscode -c "\
         set -eux \
         && vcpkg install \
+            boost:x64-linux boost:arm64-linux \
             openssl:x64-linux openssl:arm64-linux \
             pugixml:x64-linux pugixml:arm64-linux \
             yaml-cpp:x64-linux yaml-cpp:arm64-linux \
@@ -302,6 +303,10 @@ RUN --mount=type=cache,target=/home/vscode/.cache/vcpkg,id=vcpkg-cache,uid=1000,
             re2:x64-linux re2:arm64-linux \
             gflags:x64-linux gflags:arm64-linux \
             sqlite3:x64-linux sqlite3:arm64-linux \
+            slick-net:x64-linux slick-net:arm64-linux \
+            drogon:x64-linux drogon:arm64-linux \
+            neko-network:x64-linux neko-network:arm64-linux \
+            oatpp-curl:x64-linux oatpp-curl:arm64-linux \
         "
 
 # 工作目录及最终用户切换
