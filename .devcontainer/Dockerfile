@@ -295,7 +295,7 @@ vcpkg install --triplet x64-linux   --x-install-root=/home/vscode/.vcpkg-manifes
 vcpkg install --triplet arm64-linux --x-install-root=/home/vscode/.vcpkg-manifest/vcpkg_installed
 EOF
 
-RUN --mount=type=cache,target=/home/vscode/.cache/vcpkg,id=vcpkg-cache,uid=1000,gid=1000 set -eux \
+RUN --mount=type=cache,target=/home/vscode/.cache/vcpkg/downloads,id=vcpkg-downloads-cache,uid=1000,gid=1000 set -eux \
     && chmod +x /tmp/build-vcpkg-deps.sh \
     && mkdir -p /home/vscode/.cache/vcpkg/downloads /home/vscode/.cache/vcpkg/archives \
     && chown -R vscode:vscode /home/vscode/.cache/vcpkg "${VCPKG_ROOT}" /home/vscode/.vcpkg-manifest \

@@ -236,7 +236,7 @@ DOCKER_RUN_ARGS=(
     -v "${MOUNT_DIR}:${CONTAINER_TARGET}"
 )
 
-echo "==> 挂载持久化缓存卷（独立于镜像生命周期，跨 build/import 保留）："
+echo "==> 挂载持久化缓存卷："
 for spec in "${CACHE_VOLUME_SPECS[@]}"; do
     suffix="${spec%%:*}"
     path="${spec#*:}"
@@ -245,9 +245,21 @@ for spec in "${CACHE_VOLUME_SPECS[@]}"; do
     printf "    %-20s -> %s\n" "${vol_name}" "${path}"
 done
 
+echo "==> 同步镜像内置的 vcpkg 二进制缓存到持久化卷"
+docker run --rm --user root \
+    -v "${IMAGE_NAME}-cache-vcpkg:/mnt/vcpkg-cache-volume" \
+    "${FULL_IMAGE}" \
+    bash -c '
+        set -eux
+        mkdir -p /mnt/vcpkg-cache-volume/archives /mnt/vcpkg-cache-volume/downloads
+        if [ -d /home/vscode/.cache/vcpkg/archives ]; then
+            cp -an /home/vscode/.cache/vcpkg/archives/. /mnt/vcpkg-cache-volume/archives/ 2>/dev/null || true
+        fi
+        chown -R 1000:1000 /mnt/vcpkg-cache-volume
+    '
+
 echo "==> 启动容器: ${CONTAINER_NAME}"
 echo "    挂载宿主机目录: ${MOUNT_DIR} -> ${CONTAINER_TARGET}"
-
 docker run "${DOCKER_RUN_ARGS[@]}" "${FULL_IMAGE}"
 
 # 修复权限：
