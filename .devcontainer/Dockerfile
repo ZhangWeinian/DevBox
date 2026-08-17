@@ -190,22 +190,38 @@ RUN set -eux \
     " \
     && ln -sf /usr/local/bin/ninja /usr/bin/ninja
 
-# clang-format：LLVM 官方 apt 仓库（apt.llvm.org），版本号动态查询 GitHub 最新 release，不写死版本号
+# LLVM/Clang 工具链：编译器（clang/clang++）、链接器（lld）、调试器（lldb）、
+# 代码分析/格式化工具（clang-format/clang-tidy/clangd/clang-query/scan-build 等）
 RUN set -eux \
     && apt-get update \
     && LLVM_LATEST=$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest \
          | grep -Po '"tag_name":\s*"llvmorg-\K[0-9]+') \
-    && echo "Resolved latest LLVM major version: ${LLVM_LATEST}" \
+    && echo "==> Resolved latest LLVM major version: ${LLVM_LATEST}" \
     && curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh \
     && chmod +x /tmp/llvm.sh \
-    && /tmp/llvm.sh "${LLVM_LATEST}" \
-    && apt-get install -y --no-install-recommends "clang-format-${LLVM_LATEST}" \
-    && ln -sf "/usr/bin/clang-format-${LLVM_LATEST}" /usr/local/bin/clang-format \
+    && /tmp/llvm.sh "${LLVM_LATEST}" all \
     && rm -f /tmp/llvm.sh \
+    && LLVM_BIN_DIR="/usr/lib/llvm-${LLVM_LATEST}/bin" \
+    && if [ ! -d "${LLVM_BIN_DIR}" ]; then \
+        echo "FATAL: 预期的 LLVM 二进制目录 ${LLVM_BIN_DIR} 不存在，安装可能未成功" >&2; \
+        exit 1; \
+    fi \
+    && for f in "${LLVM_BIN_DIR}"/*; do \
+        [ -f "$f" ] && [ -x "$f" ] && ln -sf "$f" "/usr/local/bin/$(basename "$f")"; \
+    done \
     && apt-get autoremove -y \
     && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/* \
-    && clang-format --version
+    && clang --version \
+    && clang++ --version \
+    && clang-format --version \
+    && clang-tidy --version \
+    && clangd --version \
+    && lldb --version \
+    && llvm-config --version \
+    && command -v ld.lld \
+    && gcc --version \
+    && g++ --version
 
 # Microsoft OpenJDK 21：从 distroless 镜像拷贝，保留 JDK 是为了运行第三方 Java 工具链，不是本环境的开发核心
 ENV JAVA_HOME=/usr/lib/jvm/msopenjdk-21
