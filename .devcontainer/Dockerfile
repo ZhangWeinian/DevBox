@@ -289,6 +289,7 @@ ENV VCPKG_DOWNLOADS=/home/vscode/.cache/vcpkg/downloads
 ENV VCPKG_BINARY_SOURCES="clear;files,/home/vscode/.cache/vcpkg/archives,readwrite"
 ENV VCPKG_FEATURE_FLAGS=manifests,versions,binarycaching
 ENV VCPKG_FORCE_SYSTEM_BINARIES=1
+ENV VCPKG_DEFAULT_TRIPLET=x64-linux
 ENV PATH="${PATH}:${VCPKG_ROOT}"
 
 # 显式 clone vcpkg（浅克隆即可，build-vcpkg-deps.sh 会自动 unshallow 补全历史）
