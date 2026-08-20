@@ -255,14 +255,14 @@ RUN set -eux \
 # 个人配置文件
 # 母版统一放在 ~/.format/，作为唯一数据源：
 #   - .vimrc          → ~/.vimrc（vim 固定读取此路径，单独软链）
-#   - .clang-format   → ~/default.clang-format（供开发者复制到项目目录）
+#   - .clang-format   → ~/.clang-format（供开发者复制到项目目录）
 #   - 其余文件通过 devcontainer.json 中各扩展的绝对路径直接引用
 COPY --chown=vscode:vscode .format/ /home/vscode/.format/
 RUN set -eux \
     && ln -sf /home/vscode/.format/.vimrc        /home/vscode/.vimrc \
     && chown -h vscode:vscode                    /home/vscode/.vimrc \
-    && ln -sf /home/vscode/.format/.clang-format /home/vscode/default.clang-format \
-    && chown -h vscode:vscode                    /home/vscode/default.clang-format
+    && ln -sf /home/vscode/.format/.clang-format /home/vscode/.clang-format \
+    && chown -h vscode:vscode                    /home/vscode/.clang-format
 
 # 预创建缓存目录并授权 vscode 用户，无论后续被具名卷覆盖还是 bind mount，权限保持一致
 RUN set -eux \
