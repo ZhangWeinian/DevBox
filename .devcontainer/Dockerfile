@@ -13,20 +13,6 @@ FROM mcr.microsoft.com/openjdk/jdk:${JDK_MAJOR_VERSION}-distroless AS jdk-src
 # 务必用 Debian 系变体（默认即是），不要用 -alpine：musl 与基础镜像 glibc 不兼容
 FROM node:${NODE_VARIANT} AS node-src
 
-# 辅助阶段：架构防御检测
-# 此镜像的交叉编译工具链 / vcpkg triplet 均按 amd64 宿主机硬编码
-# 若基础镜像被解析为非 amd64（例如在 arm64 宿主机上未加 --platform 直接构建），
-# 立即报错终止检测通过后生成标记文件 /arch-ok，主阶段通过 COPY --from 强制依赖此阶段，
-# 确保检测必然执行
-FROM mcr.microsoft.com/devcontainers/base:${VARIANT} AS arch-check
-RUN set -eux \
-    && ARCH="$(dpkg --print-architecture)" \
-    && if [ "${ARCH}" != "amd64" ]; then \
-        echo "FATAL: This Dockerfile only supports the construction of AMD64 basic images" >&2; \
-        exit 1; \
-        fi \
-    && touch /arch-ok
-
 # 主阶段
 # 基于 devcontainers/base 而非 devcontainers/cpp
 FROM mcr.microsoft.com/devcontainers/base:${VARIANT}
@@ -35,13 +21,14 @@ FROM mcr.microsoft.com/devcontainers/base:${VARIANT}
 ARG GCC_EXTRA_MAJOR_VERSION
 ARG JDK_MAJOR_VERSION
 
-# 强制依赖 arch-check 阶段：只有该阶段构建成功（架构检测通过）才会执行到这里
-COPY --from=arch-check /arch-ok /arch-ok
-
-# 让 vscode 对 /usr/local/bin 有写权限（uv tool install 的 BIN_DIR 指向此处）
-# 同时清理架构检测的临时标记文件
+# 架构防御：交叉编译工具链 / vcpkg triplet 均按 amd64 宿主机硬编码，
+# 基础镜像解析为非 amd64（如 arm64 宿主机未加 --platform）时立即失败；
+# 顺带让 vscode 对 /usr/local/bin 有写权限（uv tool install 的 BIN_DIR 指向此处）
 RUN set -eux \
-    && rm -f /arch-ok \
+    && [ "$(dpkg --print-architecture)" = "amd64" ] || { \
+            echo "FATAL: This Dockerfile only supports the construction of AMD64 basic images" >&2; \
+            exit 1; \
+        } \
     && chown vscode:vscode /usr/local/bin
 
 # 基础系统包
@@ -134,40 +121,28 @@ RUN set -eux \
     && chmod +x /usr/local/bin/yq \
     && yq --version
 
-# GCC 16：手动新增 GCC 工具链，注册为系统默认 c/c++ 编译器
+# GCC 16：新增第二套 GCC 工具链（含 arm64 交叉），注册为系统默认
 #
 # 设计要点：
-#   - 保留 build-essential 附带的"系统默认 gcc/g++"（版本不固定，随基础镜像滚动），
-#     动态探测其版本号，与新版 GCC 一起注册进 update-alternatives，
-#     不卸载、不覆盖，任何时候都能切换回去
-#   - 安装源策略（必须同源的组件在同一事务中统一安装）：
-#       * 编译器本体（本机 + ARM64 交叉）、libgcc/libstdc++ dev 包、
-#         binutils-aarch64-linux-gnu 统一走一次 -t unstable 事务：
-#         汇编器必须认识新版编译器的输出（.aeabi_subsection 等新伪指令），
-#         版本不一致会出现"本机编译通过、交叉编译失败"
-#       * libstdc++6 运行库会被依赖闭包连带升级：属预期行为，
-#         GLIBCXX 符号向后兼容，旧编译器产物跑在新运行库上没有问题
-#       * libc6-dev-arm64-cross（目标侧 sysroot）刻意留在稳定源：
-#         编译器版本与目标 libc 版本是正交决策，glibc 向后兼容，
-#         用较旧目标环境的头文件编译，产物在任何更新的目标上都能跑
-#       * libc6 守卫：若 unstable 工具链开始硬性要求升级 glibc（依赖闭包强制），
-#         下方检查立即失败，而不是静默把基础 libc 换成 unstable 版
-#       * 后续可关注 trixie-backports：gcc-N 进入 backports 后，把本段 unstable 源
-#         替换为 backports 源、-t unstable 改为 -t trixie-backports 即可完全同源，
-#         其余逻辑无需改动
-#   - alternatives 注册策略（增强健壮性）：
-#       * 每个工具独立成组（gcc、g++、cpp、gcov 系列、交叉编译器各一组），
-#         与 Debian gcc-defaults 的组结构对齐，不与系统自带注册争抢链接
-#       * 注册后 --set 进入 manual 模式：后续容器内 apt 升级触发包 postinst
-#         重新注册时不会改变当前选择；裸软链会被包管理器悄悄复位，故不采用
-#       * cc/c++ 组指向 /usr/bin/gcc、/usr/bin/g++ 组主链接，天然跟随选择
-#       * 原 slave 联动切换能力由 /usr/local/bin/gcc-switch 提供（见下）
-#   - 探测到的版本号写入 /usr/local/share/gcc-{default,extra}-version，
-#     供冒烟测试等后续步骤读取，避免硬编码
-#   - LLVM/Clang 全系列工具链完全不受影响，仍走 /usr/local/bin 的独立软链
+#   - 保留 build-essential 附带的系统默认 GCC（版本随基础镜像滚动，动态探测），
+#     其配套 arm64 交叉工具已在"基础系统包"步骤安装（gcc/g++-aarch64-linux-gnu）
+#   - GCC 16 从 Debian unstable 单独拉取：编译器本体（本机 + arm64 交叉）、
+#     libgcc/libstdc++ dev 包、binutils-aarch64-linux-gnu 必须同源同事务安装，
+#     保证汇编器认识新版编译器的输出（.aeabi_subsection 等新伪指令），
+#     避免"本机编译通过、交叉编译失败"
+#   - unstable 源配 APT Pinning（Pin-Priority 100），只影响显式 -t unstable
+#     安装的包，装完立即移除；libc6-dev-arm64-cross（目标侧 sysroot）留在稳定源，
+#     glibc 向后兼容，较旧目标头文件编译的产物可在更新的目标上运行
+#   - 用 update-alternatives --slave 标准方式注册两套 GCC（Debian gcc-defaults 同款），
+#     显式 --set 到 GCC 16 成为系统默认；旧版仍可用 gcc-14 版本化入口或
+#     `update-alternatives --config gcc` 访问
+#   - 交叉编译器版本化入口 aarch64-linux-gnu-gcc-{14,16} 由各包自带，
+#     无版本号入口软链指向默认版本（GCC 16）；cc/c++ 是 gcc-defaults 指向
+#     gcc/g++ 主链接的 alternatives 组，随选择自动跟随
+#   - 探测到的版本号落盘 /usr/local/share/gcc-{default,extra}-version，供冒烟测试读取
+#   - LLVM/Clang 全系列工具链不受影响，仍走 /usr/local/bin 独立软链（见下文）
 RUN set -eux \
     && DEFAULT_GCC_VER="$(gcc -dumpversion | cut -d. -f1)" \
-    && LIBC6_VER_BEFORE="$(dpkg-query -W -f='${Version}' libc6)" \
     && echo "deb http://deb.debian.org/debian unstable main" > /etc/apt/sources.list.d/unstable.list \
     && printf 'Package: *\nPin: release a=unstable\nPin-Priority: 100\n' > /etc/apt/preferences.d/unstable-pin \
     && apt-get update \
@@ -186,92 +161,39 @@ RUN set -eux \
     && apt-get autoremove -y \
     && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/* \
-    && LIBC6_VER_AFTER="$(dpkg-query -W -f='${Version}' libc6)" \
-    && if [ "${LIBC6_VER_BEFORE}" != "${LIBC6_VER_AFTER}" ]; then \
-        echo "FATAL: 安装 GCC-${GCC_EXTRA_MAJOR_VERSION} 连带升级了 libc6（${LIBC6_VER_BEFORE} → ${LIBC6_VER_AFTER}）" >&2; \
-        echo "unstable 工具链已与稳定源基础不兼容" >&2; \
-        echo "建议：等待 gcc-${GCC_EXTRA_MAJOR_VERSION} 进入 trixie-backports" >&2; \
-        echo "后改用 backports 源，或暂时降低 GCC_EXTRA_MAJOR_VERSION"  >&2; \
-        exit 1; \
-        fi \
     && printf '%s\n' "${DEFAULT_GCC_VER}" > /usr/local/share/gcc-default-version \
     && printf '%s\n' "${GCC_EXTRA_MAJOR_VERSION}" > /usr/local/share/gcc-extra-version \
-    && for v in "${DEFAULT_GCC_VER}" "${GCC_EXTRA_MAJOR_VERSION}"; do \
-        for b in gcc g++ cpp gcc-ar gcc-nm gcc-ranlib gcov gcov-dump gcov-tool \
-                 aarch64-linux-gnu-gcc aarch64-linux-gnu-g++; do \
-            if [ ! -x "/usr/bin/${b}-${v}" ]; then \
-                echo "FATAL: 预期的二进制 /usr/bin/${b}-${v} 不存在" >&2; \
-                exit 1; \
-            fi; \
-        done; \
-        done \
-    && (update-alternatives --get-selections | grep -E '^(cc|c\+\+|cpp|gcc|g\+\+|gcov|aarch64-linux-gnu-g)' || true) \
-    && for tool in gcc g++ cpp gcc-ar gcc-nm gcc-ranlib gcov gcov-dump gcov-tool \
-                   aarch64-linux-gnu-gcc aarch64-linux-gnu-g++; do \
-        update-alternatives --remove-all "${tool}" 2>/dev/null || true; \
-        update-alternatives --install "/usr/bin/${tool}" "${tool}" \
-            "/usr/bin/${tool}-${DEFAULT_GCC_VER}" "$((DEFAULT_GCC_VER * 10))"; \
-        update-alternatives --install "/usr/bin/${tool}" "${tool}" \
-            "/usr/bin/${tool}-${GCC_EXTRA_MAJOR_VERSION}" "$((GCC_EXTRA_MAJOR_VERSION * 10))"; \
-        update-alternatives --set "${tool}" "/usr/bin/${tool}-${GCC_EXTRA_MAJOR_VERSION}"; \
-        done \
-    && update-alternatives --remove-all cc 2>/dev/null || true \
-    && update-alternatives --remove-all c++ 2>/dev/null || true \
-    && update-alternatives --install /usr/bin/cc  cc  /usr/bin/gcc "$((GCC_EXTRA_MAJOR_VERSION * 10))" \
-    && update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++ "$((GCC_EXTRA_MAJOR_VERSION * 10))" \
-    && update-alternatives --set cc  /usr/bin/gcc \
-    && update-alternatives --set c++ /usr/bin/g++ \
-    && update-alternatives --display gcc \
-    && for c in gcc g++ cpp cc c++ aarch64-linux-gnu-gcc aarch64-linux-gnu-g++; do \
+    && update-alternatives --install /usr/bin/gcc gcc "/usr/bin/gcc-${DEFAULT_GCC_VER}" "$((DEFAULT_GCC_VER * 10))" \
+        --slave /usr/bin/g++ g++ "/usr/bin/g++-${DEFAULT_GCC_VER}" \
+        --slave /usr/bin/gcc-ar gcc-ar "/usr/bin/gcc-ar-${DEFAULT_GCC_VER}" \
+        --slave /usr/bin/gcc-nm gcc-nm "/usr/bin/gcc-nm-${DEFAULT_GCC_VER}" \
+        --slave /usr/bin/gcc-ranlib gcc-ranlib "/usr/bin/gcc-ranlib-${DEFAULT_GCC_VER}" \
+        --slave /usr/bin/gcov gcov "/usr/bin/gcov-${DEFAULT_GCC_VER}" \
+        --slave /usr/bin/gcov-dump gcov-dump "/usr/bin/gcov-dump-${DEFAULT_GCC_VER}" \
+        --slave /usr/bin/gcov-tool gcov-tool "/usr/bin/gcov-tool-${DEFAULT_GCC_VER}" \
+    && update-alternatives --install /usr/bin/gcc gcc \
+        "/usr/bin/gcc-${GCC_EXTRA_MAJOR_VERSION}" "$((GCC_EXTRA_MAJOR_VERSION * 10))" \
+        --slave /usr/bin/g++ g++ "/usr/bin/g++-${GCC_EXTRA_MAJOR_VERSION}" \
+        --slave /usr/bin/gcc-ar gcc-ar "/usr/bin/gcc-ar-${GCC_EXTRA_MAJOR_VERSION}" \
+        --slave /usr/bin/gcc-nm gcc-nm "/usr/bin/gcc-nm-${GCC_EXTRA_MAJOR_VERSION}" \
+        --slave /usr/bin/gcc-ranlib gcc-ranlib "/usr/bin/gcc-ranlib-${GCC_EXTRA_MAJOR_VERSION}" \
+        --slave /usr/bin/gcov gcov "/usr/bin/gcov-${GCC_EXTRA_MAJOR_VERSION}" \
+        --slave /usr/bin/gcov-dump gcov-dump "/usr/bin/gcov-dump-${GCC_EXTRA_MAJOR_VERSION}" \
+        --slave /usr/bin/gcov-tool gcov-tool "/usr/bin/gcov-tool-${GCC_EXTRA_MAJOR_VERSION}" \
+    && update-alternatives --set gcc "/usr/bin/gcc-${GCC_EXTRA_MAJOR_VERSION}" \
+    && update-alternatives --install /usr/bin/cpp cpp \
+        "/usr/bin/cpp-${GCC_EXTRA_MAJOR_VERSION}" "$((GCC_EXTRA_MAJOR_VERSION * 10))" \
+    && update-alternatives --set cpp "/usr/bin/cpp-${GCC_EXTRA_MAJOR_VERSION}" \
+    && ln -sf "/usr/bin/aarch64-linux-gnu-gcc-${GCC_EXTRA_MAJOR_VERSION}" /usr/bin/aarch64-linux-gnu-gcc \
+    && ln -sf "/usr/bin/aarch64-linux-gnu-g++-${GCC_EXTRA_MAJOR_VERSION}" /usr/bin/aarch64-linux-gnu-g++ \
+    && for c in gcc g++ cc c++ cpp aarch64-linux-gnu-gcc aarch64-linux-gnu-g++; do \
         GOT="$("${c}" -dumpversion | cut -d. -f1)"; \
         if [ "${GOT}" != "${GCC_EXTRA_MAJOR_VERSION}" ]; then \
             echo "FATAL: ${c} 当前解析到 GCC ${GOT}，预期 ${GCC_EXTRA_MAJOR_VERSION}" >&2; \
             exit 1; \
         fi; \
         echo "OK: ${c} -> GCC ${GOT}"; \
-        done \
-    && "/usr/bin/gcc-${DEFAULT_GCC_VER}" --version | head -n1 \
-    && "/usr/bin/g++-${DEFAULT_GCC_VER}" --version | head -n1 \
-    && "/usr/bin/aarch64-linux-gnu-gcc-${DEFAULT_GCC_VER}" --version | head -n1 \
-    && "/usr/bin/aarch64-linux-gnu-g++-${DEFAULT_GCC_VER}" --version | head -n1 \
-    && "/usr/bin/gcc-${GCC_EXTRA_MAJOR_VERSION}" --version | head -n1 \
-    && "/usr/bin/g++-${GCC_EXTRA_MAJOR_VERSION}" --version | head -n1 \
-    && "/usr/bin/aarch64-linux-gnu-gcc-${GCC_EXTRA_MAJOR_VERSION}" --version | head -n1 \
-    && "/usr/bin/aarch64-linux-gnu-g++-${GCC_EXTRA_MAJOR_VERSION}" --version | head -n1 \
-    && aarch64-linux-gnu-as --version | head -n1
-
-# gcc-switch：整链切换 GCC 工具链（本机 + arm64 交叉 + gcov 系列）
-# 取代原 slave 联动设计：所有工具独立成组后，联动切换统一收口到此脚本；
-# cc/c++ 指向 gcc/g++ 组主链接，随切换自动跟随，无需处理
-# 注意：工具列表需与上方注册循环保持一致；执行需要 root/sudo
-COPY <<'EOF' /usr/local/bin/gcc-switch
-#!/bin/sh
-# usage: sudo gcc-switch <major-version>   e.g. sudo gcc-switch 14 / sudo gcc-switch 16
-set -eu
-if [ "$#" -ne 1 ]; then
-    echo "usage: gcc-switch <major-version>" >&2
-    exit 1
-fi
-ver="$1"
-status=0
-for tool in gcc g++ cpp gcc-ar gcc-nm gcc-ranlib gcov gcov-dump gcov-tool \
-            aarch64-linux-gnu-gcc aarch64-linux-gnu-g++; do
-    target="/usr/bin/${tool}-${ver}"
-    if update-alternatives --list "${tool}" 2>/dev/null | grep -qx "${target}"; then
-        update-alternatives --set "${tool}" "${target}"
-    else
-        echo "skip: ${target} 未注册（该版本可能未安装）" >&2
-        status=1
-    fi
-done
-exit "${status}"
-EOF
-
-RUN set -eux \
-    && chmod +x /usr/local/bin/gcc-switch \
-    && gcc-switch "${GCC_EXTRA_MAJOR_VERSION}" \
-    && test "$(gcc -dumpversion | cut -d. -f1)" = "${GCC_EXTRA_MAJOR_VERSION}" \
-    && test "$(g++ -dumpversion | cut -d. -f1)" = "${GCC_EXTRA_MAJOR_VERSION}"
+        done
 
 # .NET 10 LTS
 RUN set -eux \
@@ -294,9 +216,7 @@ ENV UV_CACHE_DIR=/home/vscode/.cache/uv
 ENV PIP_CACHE_DIR=/home/vscode/.cache/pip
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 RUN set -eux \
-    && uv --version
-
-RUN set -eux \
+    && uv --version \
     && mkdir -p \
         "${UV_PYTHON_INSTALL_DIR}" \
         "${UV_TOOL_DIR}" \
@@ -314,34 +234,14 @@ RUN set -eux \
         set -eux \
         && uv python install --python-preference only-managed \
     "
-# 软链按实际存在与否建立：uv 托管的 Python（python-build-standalone）不保证
-# 附带 pip，也不保证 bin/ 下有全部命令名，盲目软链会产生随上游版本漂移的悬空链接
+# uv 托管的 Python（python-build-standalone）bin/ 下必有 python3；
+# python 一并软链跟随；pip 不做全局软链——本环境包管理统一走 uv（uv pip / uv tool）
 RUN set -eux \
     && PYTHON_BIN="$(uv python find --python-preference only-managed)" \
     && [ -x "${PYTHON_BIN}" ] \
-    && PYTHON_DIR="$(dirname "${PYTHON_BIN}")" \
-    && echo "Resolved Python dir: ${PYTHON_DIR}" \
-    && ls -l "${PYTHON_DIR}" \
-    && for name in python python3 pip pip3; do \
-        if [ -e "${PYTHON_DIR}/${name}" ]; then \
-            ln -sf "${PYTHON_DIR}/${name}" "/usr/local/bin/${name}"; \
-        else \
-            echo "INFO: ${PYTHON_DIR}/${name} 不存在，跳过软链"; \
-        fi; \
-        done \
-    && if [ ! -e /usr/local/bin/python ] && [ -e /usr/local/bin/python3 ]; then \
-        ln -sf python3 /usr/local/bin/python; \
-        fi \
-    && if [ ! -e /usr/local/bin/pip ] && [ -e /usr/local/bin/pip3 ]; then \
-        ln -sf pip3 /usr/local/bin/pip; \
-        fi \
-    && python --version \
-    && python3 --version \
-    && if command -v pip >/dev/null 2>&1; then \
-            pip --version; \
-        else \
-            echo "INFO: uv 托管 Python 未附带 pip，包管理统一走 uv pip / uv tool"; \
-        fi
+    && ln -sf "${PYTHON_BIN}" /usr/local/bin/python3 \
+    && ln -sf "${PYTHON_BIN}" /usr/local/bin/python \
+    && python3 --version
 
 # CMake / Ninja / cmake-format / ruff / autoenv
 # 通过 uv tool install 安装到隔离虚拟环境，bin 软链到 /usr/local/bin
@@ -356,8 +256,6 @@ RUN set -eux \
         && uv tool install ruff \
     "
 RUN set -eux \
-    && python --version \
-    && (pip --version 2>/dev/null || echo "INFO: pip 不可用，使用 uv pip") \
     && cmake --version \
     && ninja --version \
     && cmake-format --version \
@@ -399,10 +297,15 @@ RUN set -eux \
     && llvm-config --version \
     && command -v ld.lld
 
-# 快速测试：以 vscode 用户验证所有编译器（系统默认 GCC / 新增 GCC / Clang）
-# 的本地与交叉编译能力
-# 版本号从 GCC 配置阶段落盘的文件读取，不硬编码；
-# 额外验证不带版本号的入口经 alternatives 解析后确实指向新增 GCC
+# 快速测试：以 vscode 用户验证三套工具链的本地与交叉编译能力（对应需求）：
+#   1) 系统默认 GCC 系列（gcc-${DEF_VER}）：本地编译 + 运行 + file 检查，
+#      arm64 交叉编译 + file 检查
+#   2) 新增 GCC 16 系列（gcc-${NEW_VER}）：同上；并验证 gcc/g++/cc/c++/cpp
+#      无版本号入口经 alternatives 解析后确实指向 16，以及 aarch64-linux-gnu-gcc
+#      无版本号入口可交叉编译
+#   3) LLVM Clang：本地编译 + 运行 + file 检查；arm64 交叉编译
+#      （--target=aarch64-linux-gnu，经 --gcc-toolchain 复用 GCC 的 arm64 sysroot）
+# 版本号从 GCC 配置阶段落盘的文件读取，不硬编码
 RUN set -eux \
     && su vscode -c '\
         set -eux \
@@ -442,13 +345,13 @@ RUN set -eux \
         && file /tmp/test_clang_cpp_local | grep -q "x86-64" \
         && /tmp/test_clang_c_local && /tmp/test_clang_cpp_local \
         && clang --target=aarch64-linux-gnu \
-                 --gcc-toolchain=/usr \
-                 /tmp/test.c -o /tmp/test_clang_c_arm64 \
-                 -fuse-ld=lld \
+            --gcc-toolchain=/usr \
+            /tmp/test.c -o /tmp/test_clang_c_arm64 \
+            -fuse-ld=lld \
         && clang++ --target=aarch64-linux-gnu \
-                   --gcc-toolchain=/usr \
-                   /tmp/test.cpp -o /tmp/test_clang_cpp_arm64 \
-                   -fuse-ld=lld \
+            --gcc-toolchain=/usr \
+            /tmp/test.cpp -o /tmp/test_clang_cpp_arm64 \
+            -fuse-ld=lld \
         && file /tmp/test_clang_c_arm64 | grep -q "ARM aarch64" \
         && file /tmp/test_clang_cpp_arm64 | grep -q "ARM aarch64" \
         && rm -f /tmp/test_* \
@@ -464,6 +367,7 @@ RUN set -eux \
     && java --version
 
 # Node.js：多阶段拷贝，含 node-gyp 编译原生插件所需的头文件，顺带全局安装 codegraph
+# corepack 已进入 Node 官方弃用流程（Node 25+ 移除），存在性判断保证届时构建仍可通过
 COPY --from=node-src --chown=vscode:vscode /usr/local/include/node /usr/local/include/node
 COPY --from=node-src --chown=vscode:vscode /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=node-src /usr/local/bin/node /usr/local/bin/node
@@ -474,9 +378,7 @@ RUN set -eux \
         ln -sf /usr/local/lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack; \
         fi \
     && mkdir -p /home/vscode/.npm \
-    && chown -R vscode:vscode /home/vscode/.npm
-# corepack 已进入 Node 官方弃用流程（Node 25+ 移除），存在性判断保证届时构建仍可通过
-RUN set -eux \
+    && chown -R vscode:vscode /home/vscode/.npm \
     && su vscode -c "\
         set -eux \
         && if command -v corepack >/dev/null 2>&1; then corepack enable; fi \
@@ -492,14 +394,12 @@ RUN set -eux \
 #   - .clang-format   → ~/.clang-format（供开发者复制到项目目录）
 #   - 其余文件通过 devcontainer.json 中各扩展的绝对路径直接引用
 COPY --chown=vscode:vscode .format/ /home/vscode/.format/
+# 预创建缓存目录并授权 vscode 用户，无论后续被具名卷覆盖还是 bind mount，权限保持一致
 RUN set -eux \
     && ln -sf /home/vscode/.format/.vimrc /home/vscode/.vimrc \
     && chown -h vscode:vscode /home/vscode/.vimrc \
     && ln -sf /home/vscode/.format/.clang-format /home/vscode/.clang-format \
-    && chown -h vscode:vscode /home/vscode/.clang-format
-
-# 预创建缓存目录并授权 vscode 用户，无论后续被具名卷覆盖还是 bind mount，权限保持一致
-RUN set -eux \
+    && chown -h vscode:vscode /home/vscode/.clang-format \
     && mkdir -p \
         /home/vscode/.local/share/pnpm/store \
         /home/vscode/.cache/yarn \
@@ -604,13 +504,7 @@ RUN set -eux \
 
 ENV PATH="/usr/lib/ccache:${PATH}"
 
-# 收尾：验证环境变量、创建工作目录、切换到非 root 用户
-RUN su vscode -c '\
-        set -eux \
-        && echo "PATH=$PATH" \
-        && echo "VCPKG_ROOT=$VCPKG_ROOT" \
-    '
-
+# 收尾：创建工作目录、切换到非 root 用户
 RUN set -eux \
     && mkdir -p /home/vscode/workspace \
     && chown vscode:vscode /home/vscode/workspace
