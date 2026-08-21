@@ -364,9 +364,16 @@ RUN set -eux \
 #   - 交叉编译验证：不使用 --sysroot（Debian 多架构布局不兼容 clang 的 sysroot 约定），
 #     让 clang 通过 --target 和 --gcc-toolchain 自动查找正确的头文件和库路径
 RUN set -eux \
+    && echo "deb http://deb.debian.org/debian unstable main" \
+        > /etc/apt/sources.list.d/unstable.list \
+    && printf 'Package: *\nPin: release a=unstable\nPin-Priority: 100\n' \
+        > /etc/apt/preferences.d/unstable-pin \
+    && apt-get update \
+    && apt-get -yq install --no-install-recommends -t unstable \
+        libpython3.11 \
+    && rm -f /etc/apt/sources.list.d/unstable.list /etc/apt/preferences.d/unstable-pin \
     && apt-get update \
     && apt-get -yq install --no-install-recommends \
-        libpython3.11 \
         libedit2 \
         libxml2 \
         zlib1g \
@@ -376,11 +383,6 @@ RUN set -eux \
     && curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest \
         -o /tmp/llvm_release.json \
     && VERSION=$(jq -r '.tag_name' /tmp/llvm_release.json | sed 's/^llvmorg-//') \
-    && if [ -z "${VERSION}" ]; then \
-        echo "FATAL: 未能解析 LLVM 版本号" >&2; \
-        head -20 /tmp/llvm_release.json >&2; \
-        exit 1; \
-    fi \
     && TARBALL_NAME="LLVM-${VERSION}-Linux-X64.tar.xz" \
     && TARBALL_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${VERSION}/${TARBALL_NAME}" \
     && EXPECTED_SHA256=$(jq -r \
@@ -390,28 +392,13 @@ RUN set -eux \
     && wget -q "${TARBALL_URL}" -O /tmp/llvm.tar.xz \
     && if [ -n "${EXPECTED_SHA256}" ]; then \
         ACTUAL_SHA256=$(sha256sum /tmp/llvm.tar.xz | awk '{print $1}'); \
-        if [ "${ACTUAL_SHA256}" != "${EXPECTED_SHA256}" ]; then \
-            echo "FATAL: SHA256 校验失败" >&2; \
-            echo "  期望: ${EXPECTED_SHA256}" >&2; \
-            echo "  实际: ${ACTUAL_SHA256}" >&2; \
-            exit 1; \
-        fi; \
+        [ "${ACTUAL_SHA256}" = "${EXPECTED_SHA256}" ] || exit 1; \
     fi \
-    && FILE_SIZE=$(stat -c%s /tmp/llvm.tar.xz) \
-    && if [ "${FILE_SIZE}" -lt 100000000 ]; then \
-        echo "FATAL: 文件太小 (${FILE_SIZE} bytes)" >&2; \
-        exit 1; \
-    fi \
+    && [ "$(stat -c%s /tmp/llvm.tar.xz)" -gt 100000000 ] || exit 1 \
     && tar -xf /tmp/llvm.tar.xz -C /usr/local --strip-components=1 \
     && rm -f /tmp/llvm.tar.xz /tmp/llvm_release.json \
     && for tool in clang clang++ clang-format clang-tidy clangd lldb llvm-config ld.lld llvm-ar llvm-nm; do \
-        if command -v "${tool}" >/dev/null 2>&1; then \
-            echo "--- ${tool} dependencies:"; \
-            ldd "$(command -v ${tool})" 2>&1 | grep -E "not found" && { \
-                echo "FATAL: ${tool} 有缺失的动态库依赖！" >&2; \
-                exit 1; \
-            } || echo "    ✓ All dependencies satisfied"; \
-        fi; \
+        ldd "$(command -v ${tool})" 2>&1 | grep -q "not found" && exit 1 || true; \
     done \
     && clang --version \
     && clang++ --version \
