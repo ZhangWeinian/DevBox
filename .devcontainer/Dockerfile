@@ -142,8 +142,10 @@ RUN set -eux \
 #     装完立即移除该源，避免后续任何 apt 操作误从 unstable 升级其它包
 #   - 同时安装 libgcc-16-dev / libstdc++-16-dev，确保头文件和运行时库完整，
 #     避免 vcpkg 交叉编译 arm64 triplet 时找不到对应版本的 libgcc/libstdc++
-#   - 同时安装 GCC 16 的 ARM64 交叉编译工具链，与 x86_64 版本保持一致，
-#     避免"本机用 GCC 16 编译通过，交叉编译用 GCC 14 失败"的版本不匹配问题
+#   - 同时安装 GCC 16 的 ARM64 交叉编译工具链和新版 binutils-aarch64-linux-gnu，
+#     与 x86_64 版本保持一致，避免"本机用 GCC 16 编译通过，交叉编译用 GCC 14 失败"
+#     的版本不匹配问题；新版 binutils 解决 GCC 16 生成的新伪指令
+#     （.aeabi_subsection / .aeabi_attribute）不被旧版汇编器识别的问题
 #   - cpp 不使用 alternatives 管理（状态容易损坏），直接软链到 cpp-16
 #   - cc/c++ 直接软链到 /usr/bin/gcc、/usr/bin/g++（alternatives 的总入口），
 #     会自动跟随当前 gcc/g++ 的选择，无需单独维护一套 alternatives
@@ -161,7 +163,7 @@ RUN set -eux \
     && printf 'Package: *\nPin: release a=unstable\nPin-Priority: 100\n' \
         > /etc/apt/preferences.d/unstable-pin \
     && apt-get update \
-    # 从 unstable 安装 GCC 16 及其开发库（x86_64 原生 + arm64 交叉编译）
+    # 从 unstable 安装 GCC 16 及其开发库（x86_64 原生 + arm64 交叉编译 + 新版 binutils）
     && apt-get -yq install --no-install-recommends -t unstable \
         "gcc-${GCC_EXTRA_MAJOR_VERSION}" \
         "g++-${GCC_EXTRA_MAJOR_VERSION}" \
@@ -171,6 +173,7 @@ RUN set -eux \
         "gcc-${GCC_EXTRA_MAJOR_VERSION}-aarch64-linux-gnu" \
         "g++-${GCC_EXTRA_MAJOR_VERSION}-aarch64-linux-gnu" \
         "cpp-${GCC_EXTRA_MAJOR_VERSION}-aarch64-linux-gnu" \
+        "binutils-aarch64-linux-gnu" \
     # 立即移除 unstable 源和 pinning 配置，避免影响后续 apt 操作
     && rm -f /etc/apt/sources.list.d/unstable.list /etc/apt/preferences.d/unstable-pin \
     && apt-get update \
@@ -229,51 +232,48 @@ RUN set -eux \
     && ln -sf /usr/bin/gcc /usr/bin/cc \
     && ln -sf /usr/bin/g++ /usr/bin/c++ \
     # ARM64 交叉编译器：更新软链指向 GCC 16 版本
-    # 保持 gcc-aarch64-linux-gnu 和 g++-aarch64-linux-gnu 两个入口名不变，
-    # 但让它们指向 GCC 16 版本
     && ln -sf "/usr/bin/aarch64-linux-gnu-gcc-${GCC_EXTRA_MAJOR_VERSION}" \
               "/usr/bin/aarch64-linux-gnu-gcc" \
     && echo "    Updated aarch64-linux-gnu-gcc -> GCC ${GCC_EXTRA_MAJOR_VERSION}" \
     && ln -sf "/usr/bin/aarch64-linux-gnu-g++-${GCC_EXTRA_MAJOR_VERSION}" \
               "/usr/bin/aarch64-linux-gnu-g++" \
     && echo "    Updated aarch64-linux-gnu-g++ -> GCC ${GCC_EXTRA_MAJOR_VERSION}" \
-    # 最终验证 \
-    # 1. GCC 16 x86_64 安装并注册为默认 \
+    # 最终验证
     && update-alternatives --display gcc \
     && gcc --version \
     && g++ --version \
     && cc  --version \
     && c++ --version \
     && cpp --version \
-    # 2. GCC 16 ARM64 交叉编译安装并注册为默认 \
     && aarch64-linux-gnu-gcc --version \
     && aarch64-linux-gnu-g++ --version \
-    # 3. GCC 14 x86_64 及其交叉编译正常 \
+    && aarch64-linux-gnu-as --version \
     && "gcc-${DEFAULT_GCC_VER}" --version \
     && "g++-${DEFAULT_GCC_VER}" --version \
     && "aarch64-linux-gnu-gcc-${DEFAULT_GCC_VER}" --version \
     && "aarch64-linux-gnu-g++-${DEFAULT_GCC_VER}" --version \
-    # 4. GCC 16 x86_64 及其交叉编译正常 \
     && "gcc-${GCC_EXTRA_MAJOR_VERSION}" --version \
     && "g++-${GCC_EXTRA_MAJOR_VERSION}" --version \
     && "aarch64-linux-gnu-gcc-${GCC_EXTRA_MAJOR_VERSION}" --version \
     && "aarch64-linux-gnu-g++-${GCC_EXTRA_MAJOR_VERSION}" --version \
-    # 5. 编译测试（确保实际可用） \
+    # 编译测试
     && echo 'int main() { return 0; }' > /tmp/test.c \
     && echo 'int main() { return 0; }' > /tmp/test.cpp \
+    # x86_64 编译测试
     && gcc /tmp/test.c -o /tmp/test_gcc_default \
     && g++ /tmp/test.cpp -o /tmp/test_gpp_default \
     && "gcc-${DEFAULT_GCC_VER}" /tmp/test.c -o /tmp/test_gcc14 \
     && "g++-${DEFAULT_GCC_VER}" /tmp/test.cpp -o /tmp/test_gpp14 \
     && "gcc-${GCC_EXTRA_MAJOR_VERSION}" /tmp/test.c -o /tmp/test_gcc16 \
     && "g++-${GCC_EXTRA_MAJOR_VERSION}" /tmp/test.cpp -o /tmp/test_gpp16 \
+    # ARM64 交叉编译测试
     && aarch64-linux-gnu-gcc /tmp/test.c -o /tmp/test_arm64_gcc_default \
     && aarch64-linux-gnu-g++ /tmp/test.cpp -o /tmp/test_arm64_gpp_default \
     && "aarch64-linux-gnu-gcc-${DEFAULT_GCC_VER}" /tmp/test.c -o /tmp/test_arm64_gcc14 \
     && "aarch64-linux-gnu-g++-${DEFAULT_GCC_VER}" /tmp/test.cpp -o /tmp/test_arm64_gpp14 \
     && "aarch64-linux-gnu-gcc-${GCC_EXTRA_MAJOR_VERSION}" /tmp/test.c -o /tmp/test_arm64_gcc16 \
     && "aarch64-linux-gnu-g++-${GCC_EXTRA_MAJOR_VERSION}" /tmp/test.cpp -o /tmp/test_arm64_gpp16 \
-    # 验证编译产物架构 \
+    # 验证编译产物架构
     && file /tmp/test_gcc_default | grep -q "x86-64" \
     && file /tmp/test_gpp_default | grep -q "x86-64" \
     && file /tmp/test_gcc14 | grep -q "x86-64" \
