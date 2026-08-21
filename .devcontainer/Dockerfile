@@ -31,6 +31,9 @@ RUN set -eux \
 # 基于 devcontainers/base 而非 devcontainers/cpp
 FROM mcr.microsoft.com/devcontainers/base:${VARIANT}
 
+# 重新声明 ARG，使其在当前 stage 的 RUN 中可用
+ARG GCC_EXTRA_MAJOR_VERSION
+
 # 强制依赖 arch-check 阶段：只有该阶段构建成功（架构检测通过）才会执行到这里
 COPY --from=arch-check /arch-ok /arch-ok
 
