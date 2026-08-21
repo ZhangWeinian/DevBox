@@ -369,7 +369,7 @@ RUN set -eux \
     && apt-get autoremove -y \
     && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/* \
-    && for tool in clang clang++ clang-format clang-tidy clangd lldb lld llvm-config; do \
+    && for tool in clang clang++ clang-format clang-tidy clangd lldb lld ld.lld llvm-config; do \
          src="/usr/bin/${tool}-${LLVM_LATEST}"; \
          if [ -x "${src}" ]; then \
            ln -sf "${src}" "/usr/local/bin/${tool}"; \
