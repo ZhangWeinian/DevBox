@@ -15,8 +15,9 @@ FROM node:${NODE_VARIANT} AS node-src
 
 # 辅助阶段：架构防御检测
 # 此镜像的交叉编译工具链 / vcpkg triplet 均按 amd64 宿主机硬编码
-# 若基础镜像被解析为非 amd64（例如在 arm64 宿主机上未加 --platform 直接构建），立即报错终止
-# 检测通过后生成标记文件 /arch-ok，主阶段通过 COPY --from 强制依赖此阶段，确保检测必然执行
+# 若基础镜像被解析为非 amd64（例如在 arm64 宿主机上未加 --platform 直接构建），
+# 立即报错终止检测通过后生成标记文件 /arch-ok，主阶段通过 COPY --from 强制依赖此阶段，
+# 确保检测必然执行
 FROM mcr.microsoft.com/devcontainers/base:${VARIANT} AS arch-check
 RUN set -eux \
     && ARCH="$(dpkg --print-architecture)" \
@@ -45,8 +46,10 @@ RUN set -eux \
 
 # 基础系统包
 # 编译工具链
-#   build-essential/gdb/cppcheck/valgrind：base 镜像不含编译调试套件，需显式补齐（cpp 变体隐式提供这些，改用 base 后必须自己声明）
-#   注意：cmake 不在此处安装，由后续 uv tool install cmake 提供，避免 apt 版（版本较旧）与 uv 版（构建时最新）重复安装造成歧义
+#   build-essential/gdb/cppcheck/valgrind：base 镜像不含编译调试套件，
+#   需显式补齐（cpp 变体隐式提供这些，改用 base 后必须自己声明）
+#   注意：cmake 不在此处安装，由后续 uv tool install cmake 提供，
+#   避免 apt 版（版本较旧）与 uv 版（构建时最新）重复安装造成歧义
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CCACHE_DIR=/home/vscode/.cache/ccache
 ENV USE_CCACHE=1
@@ -139,6 +142,8 @@ RUN set -eux \
 #     装完立即移除该源，避免后续任何 apt 操作误从 unstable 升级其它包
 #   - 同时安装 libgcc-16-dev / libstdc++-16-dev，确保头文件和运行时库完整，
 #     避免 vcpkg 交叉编译 arm64 triplet 时找不到对应版本的 libgcc/libstdc++
+#   - 同时安装 GCC 16 的 ARM64 交叉编译工具链，与 x86_64 版本保持一致，
+#     避免"本机用 GCC 16 编译通过，交叉编译用 GCC 14 失败"的版本不匹配问题
 #   - cpp 不使用 alternatives 管理（状态容易损坏），直接软链到 cpp-16
 #   - cc/c++ 直接软链到 /usr/bin/gcc、/usr/bin/g++（alternatives 的总入口），
 #     会自动跟随当前 gcc/g++ 的选择，无需单独维护一套 alternatives
@@ -156,13 +161,16 @@ RUN set -eux \
     && printf 'Package: *\nPin: release a=unstable\nPin-Priority: 100\n' \
         > /etc/apt/preferences.d/unstable-pin \
     && apt-get update \
-    # 从 unstable 安装 GCC 16 及其开发库
+    # 从 unstable 安装 GCC 16 及其开发库（x86_64 原生 + arm64 交叉编译）
     && apt-get -yq install --no-install-recommends -t unstable \
         "gcc-${GCC_EXTRA_MAJOR_VERSION}" \
         "g++-${GCC_EXTRA_MAJOR_VERSION}" \
         "cpp-${GCC_EXTRA_MAJOR_VERSION}" \
         "libgcc-${GCC_EXTRA_MAJOR_VERSION}-dev" \
         "libstdc++-${GCC_EXTRA_MAJOR_VERSION}-dev" \
+        "gcc-${GCC_EXTRA_MAJOR_VERSION}-aarch64-linux-gnu" \
+        "g++-${GCC_EXTRA_MAJOR_VERSION}-aarch64-linux-gnu" \
+        "cpp-${GCC_EXTRA_MAJOR_VERSION}-aarch64-linux-gnu" \
     # 立即移除 unstable 源和 pinning 配置，避免影响后续 apt 操作
     && rm -f /etc/apt/sources.list.d/unstable.list /etc/apt/preferences.d/unstable-pin \
     && apt-get update \
@@ -184,7 +192,11 @@ RUN set -eux \
        "/usr/bin/gcov-dump-${GCC_EXTRA_MAJOR_VERSION}" \
        "/usr/bin/gcov-tool-${GCC_EXTRA_MAJOR_VERSION}" \
        "/usr/bin/cpp-${DEFAULT_GCC_VER}" \
-       "/usr/bin/cpp-${GCC_EXTRA_MAJOR_VERSION}"; do \
+       "/usr/bin/cpp-${GCC_EXTRA_MAJOR_VERSION}" \
+       "/usr/bin/aarch64-linux-gnu-gcc-${DEFAULT_GCC_VER}" \
+       "/usr/bin/aarch64-linux-gnu-g++-${DEFAULT_GCC_VER}" \
+       "/usr/bin/aarch64-linux-gnu-gcc-${GCC_EXTRA_MAJOR_VERSION}" \
+       "/usr/bin/aarch64-linux-gnu-g++-${GCC_EXTRA_MAJOR_VERSION}"; do \
        if [ ! -x "${slave_bin}" ]; then \
            echo "FATAL: 预期的二进制 ${slave_bin} 不存在" >&2; \
            exit 1; \
@@ -211,21 +223,70 @@ RUN set -eux \
         --slave /usr/bin/gcov-tool  gcov-tool   "/usr/bin/gcov-tool-${GCC_EXTRA_MAJOR_VERSION}" \
     # 显式 --set 确保非交互式构建结果确定
     && update-alternatives --set gcc "/usr/bin/gcc-${GCC_EXTRA_MAJOR_VERSION}" \
+    # cpp：不使用 alternatives（状态容易损坏），直接软链到 cpp-16
     && ln -sf "/usr/bin/cpp-${GCC_EXTRA_MAJOR_VERSION}" /usr/bin/cpp \
+    # cc/c++ 软链到 alternatives 总入口，自动跟随 gcc/g++ 切换
     && ln -sf /usr/bin/gcc /usr/bin/cc \
     && ln -sf /usr/bin/g++ /usr/bin/c++ \
-    # 验证
-    && echo "==> GCC alternatives:" \
+    # ARM64 交叉编译器：更新软链指向 GCC 16 版本
+    # 保持 gcc-aarch64-linux-gnu 和 g++-aarch64-linux-gnu 两个入口名不变，
+    # 但让它们指向 GCC 16 版本
+    && ln -sf "/usr/bin/aarch64-linux-gnu-gcc-${GCC_EXTRA_MAJOR_VERSION}" \
+              "/usr/bin/aarch64-linux-gnu-gcc" \
+    && echo "    Updated aarch64-linux-gnu-gcc -> GCC ${GCC_EXTRA_MAJOR_VERSION}" \
+    && ln -sf "/usr/bin/aarch64-linux-gnu-g++-${GCC_EXTRA_MAJOR_VERSION}" \
+              "/usr/bin/aarch64-linux-gnu-g++" \
+    && echo "    Updated aarch64-linux-gnu-g++ -> GCC ${GCC_EXTRA_MAJOR_VERSION}" \
+    # 最终验证 \
+    # 1. GCC 16 x86_64 安装并注册为默认 \
     && update-alternatives --display gcc \
     && gcc --version \
     && g++ --version \
     && cc  --version \
     && c++ --version \
     && cpp --version \
+    # 2. GCC 16 ARM64 交叉编译安装并注册为默认 \
+    && aarch64-linux-gnu-gcc --version \
+    && aarch64-linux-gnu-g++ --version \
+    # 3. GCC 14 x86_64 及其交叉编译正常 \
     && "gcc-${DEFAULT_GCC_VER}" --version \
     && "g++-${DEFAULT_GCC_VER}" --version \
+    && "aarch64-linux-gnu-gcc-${DEFAULT_GCC_VER}" --version \
+    && "aarch64-linux-gnu-g++-${DEFAULT_GCC_VER}" --version \
+    # 4. GCC 16 x86_64 及其交叉编译正常 \
     && "gcc-${GCC_EXTRA_MAJOR_VERSION}" --version \
-    && "g++-${GCC_EXTRA_MAJOR_VERSION}" --version
+    && "g++-${GCC_EXTRA_MAJOR_VERSION}" --version \
+    && "aarch64-linux-gnu-gcc-${GCC_EXTRA_MAJOR_VERSION}" --version \
+    && "aarch64-linux-gnu-g++-${GCC_EXTRA_MAJOR_VERSION}" --version \
+    # 5. 编译测试（确保实际可用） \
+    && echo 'int main() { return 0; }' > /tmp/test.c \
+    && echo 'int main() { return 0; }' > /tmp/test.cpp \
+    && gcc /tmp/test.c -o /tmp/test_gcc_default \
+    && g++ /tmp/test.cpp -o /tmp/test_gpp_default \
+    && "gcc-${DEFAULT_GCC_VER}" /tmp/test.c -o /tmp/test_gcc14 \
+    && "g++-${DEFAULT_GCC_VER}" /tmp/test.cpp -o /tmp/test_gpp14 \
+    && "gcc-${GCC_EXTRA_MAJOR_VERSION}" /tmp/test.c -o /tmp/test_gcc16 \
+    && "g++-${GCC_EXTRA_MAJOR_VERSION}" /tmp/test.cpp -o /tmp/test_gpp16 \
+    && aarch64-linux-gnu-gcc /tmp/test.c -o /tmp/test_arm64_gcc_default \
+    && aarch64-linux-gnu-g++ /tmp/test.cpp -o /tmp/test_arm64_gpp_default \
+    && "aarch64-linux-gnu-gcc-${DEFAULT_GCC_VER}" /tmp/test.c -o /tmp/test_arm64_gcc14 \
+    && "aarch64-linux-gnu-g++-${DEFAULT_GCC_VER}" /tmp/test.cpp -o /tmp/test_arm64_gpp14 \
+    && "aarch64-linux-gnu-gcc-${GCC_EXTRA_MAJOR_VERSION}" /tmp/test.c -o /tmp/test_arm64_gcc16 \
+    && "aarch64-linux-gnu-g++-${GCC_EXTRA_MAJOR_VERSION}" /tmp/test.cpp -o /tmp/test_arm64_gpp16 \
+    # 验证编译产物架构 \
+    && file /tmp/test_gcc_default | grep -q "x86-64" \
+    && file /tmp/test_gpp_default | grep -q "x86-64" \
+    && file /tmp/test_gcc14 | grep -q "x86-64" \
+    && file /tmp/test_gpp14 | grep -q "x86-64" \
+    && file /tmp/test_gcc16 | grep -q "x86-64" \
+    && file /tmp/test_gpp16 | grep -q "x86-64" \
+    && file /tmp/test_arm64_gcc_default | grep -q "ARM aarch64" \
+    && file /tmp/test_arm64_gpp_default | grep -q "ARM aarch64" \
+    && file /tmp/test_arm64_gcc14 | grep -q "ARM aarch64" \
+    && file /tmp/test_arm64_gpp14 | grep -q "ARM aarch64" \
+    && file /tmp/test_arm64_gcc16 | grep -q "ARM aarch64" \
+    && file /tmp/test_arm64_gpp16 | grep -q "ARM aarch64" \
+    && rm -f /tmp/test.c /tmp/test.cpp /tmp/test_gcc_* /tmp/test_gpp_* /tmp/test_arm64_*
 
 # .NET 10 LTS
 RUN set -eux \
@@ -261,7 +322,8 @@ RUN set -eux \
         "${UV_CACHE_DIR}" \
         "${PIP_CACHE_DIR}"
 
-# Python：通过 uv 安装最新受管理版本，并建立全局软链，全程只有一套 Python，工具链和临时脚本都能找到，不产生版本歧义
+# Python：通过 uv 安装最新受管理版本，并建立全局软链，
+# 全程只有一套 Python，工具链和临时脚本都能找到，不产生版本歧义
 RUN set -eux \
     && su vscode -c "\
         set -eux \
@@ -334,7 +396,8 @@ RUN set -eux \
     && gcc --version \
     && g++ --version
 
-# Microsoft OpenJDK 21：从 distroless 镜像拷贝，保留 JDK 是为了运行第三方 Java 工具链，不是本环境的开发核心
+# Microsoft OpenJDK 21：从 distroless 镜像拷贝，
+# 保留 JDK 是为了运行第三方 Java 工具链，不是本环境的开发核心
 ENV JAVA_HOME=/usr/lib/jvm/msopenjdk-21
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 COPY --from=jdk-src /usr/jdk /usr/lib/jvm/msopenjdk-21
@@ -393,8 +456,12 @@ RUN set -eux \
 # vcpkg：manifest 模式，builtin-baseline 每次构建动态生成
 #
 # 设计要点：
-#   VCPKG_DOWNLOADS 指向 /home/vscode/.cache/vcpkg/downloads，与 --mount=type=cache 的挂载点及 import.sh 的具名卷路径保持一致，是缓存持久化架构的组成部分，不可随意更改
-#   VCPKG_BINARY_SOURCES 中 archives 路径故意不使用 cache mount，编译产物会提交进镜像层，供 import.sh 同步至持久化具名卷（若也用 cache mount，archives 将只存在于 BuildKit 构建缓存，最终镜像中该路径为空，持久化卷无法从镜像获得初始内容）
+#   VCPKG_DOWNLOADS 指向 /home/vscode/.cache/vcpkg/downloads，
+#   与 --mount=type=cache 的挂载点及 import.sh 的具名卷路径保持一致，
+#   是缓存持久化架构的组成部分，不可随意更改
+#   VCPKG_BINARY_SOURCES 中 archives 路径故意不使用 cache mount，编译产物会提交进镜像层，
+#   供 import.sh 同步至持久化具名卷（若也用 cache mount，archives 将只存在于 BuildKit 
+#   构建缓存，最终镜像中该路径为空，持久化卷无法从镜像获得初始内容）
 ENV VCPKG_ROOT=/usr/local/vcpkg
 ENV VCPKG_DOWNLOADS=/home/vscode/.cache/vcpkg/downloads
 ENV VCPKG_BINARY_SOURCES="clear;files,/home/vscode/.cache/vcpkg/archives,readwrite"
@@ -466,16 +533,13 @@ RUN su vscode -c '\
         set -eux \
         && echo "PATH=$PATH" \
         && echo "VCPKG_ROOT=$VCPKG_ROOT" \
-        && echo "=== GCC 默认版本 ===" \
         && gcc --version \
         && g++ --version \
         && cpp --version \
-        && echo "=== GCC 多版本共存验证 ===" \
         && gcc-14 --version || true \
         && g++-14 --version || true \
         && gcc-16 --version || true \
         && g++-16 --version || true \
-        && echo "=== Clang 不受影响验证 ===" \
         && clang --version \
         && clang++ --version \
     '
