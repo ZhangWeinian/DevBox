@@ -154,14 +154,9 @@ RUN set -eux \
     && DEFAULT_GCC_VER="$(gcc -dumpversion | cut -d. -f1)" \
     && DEFAULT_GCC_BIN="$(readlink -f "$(command -v gcc)")" \
     && DEFAULT_GXX_BIN="$(readlink -f "$(command -v g++)")" \
-    && echo "==> Detected default GCC version: ${DEFAULT_GCC_VER}" \
-    && echo "==> Default GCC binary: ${DEFAULT_GCC_BIN}" \
-    && echo "==> Default GXX binary: ${DEFAULT_GXX_BIN}" \
     # 添加 unstable 源 + APT Pinning（低优先级，防止污染其他包）
-    && echo "deb http://deb.debian.org/debian unstable main" \
-        > /etc/apt/sources.list.d/unstable.list \
-    && printf 'Package: *\nPin: release a=unstable\nPin-Priority: 100\n' \
-        > /etc/apt/preferences.d/unstable-pin \
+    && echo "deb http://deb.debian.org/debian unstable main" > /etc/apt/sources.list.d/unstable.list \
+    && printf 'Package: *\nPin: release a=unstable\nPin-Priority: 100\n' > /etc/apt/preferences.d/unstable-pin \
     && apt-get update \
     # 从 unstable 安装 GCC 16 及其开发库（x86_64 原生 + arm64 交叉编译 + 新版 binutils）
     && apt-get -yq install --no-install-recommends -t unstable \
@@ -232,12 +227,8 @@ RUN set -eux \
     && ln -sf /usr/bin/gcc /usr/bin/cc \
     && ln -sf /usr/bin/g++ /usr/bin/c++ \
     # ARM64 交叉编译器：更新软链指向 GCC 16 版本
-    && ln -sf "/usr/bin/aarch64-linux-gnu-gcc-${GCC_EXTRA_MAJOR_VERSION}" \
-              "/usr/bin/aarch64-linux-gnu-gcc" \
-    && echo "    Updated aarch64-linux-gnu-gcc -> GCC ${GCC_EXTRA_MAJOR_VERSION}" \
-    && ln -sf "/usr/bin/aarch64-linux-gnu-g++-${GCC_EXTRA_MAJOR_VERSION}" \
-              "/usr/bin/aarch64-linux-gnu-g++" \
-    && echo "    Updated aarch64-linux-gnu-g++ -> GCC ${GCC_EXTRA_MAJOR_VERSION}" \
+    && ln -sf "/usr/bin/aarch64-linux-gnu-gcc-${GCC_EXTRA_MAJOR_VERSION}" "/usr/bin/aarch64-linux-gnu-gcc" \
+    && ln -sf "/usr/bin/aarch64-linux-gnu-g++-${GCC_EXTRA_MAJOR_VERSION}" "/usr/bin/aarch64-linux-gnu-g++" \
     # 最终验证
     && update-alternatives --display gcc \
     && gcc --version \
@@ -376,11 +367,9 @@ RUN set -eux \
 RUN set -eux \
     && LATEST_RELEASE=$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest) \
     && VERSION=$(echo "$LATEST_RELEASE" | jq -r '.tag_name' | sed 's/^llvmorg-//') \
-    && echo "==> Resolved latest LLVM version: ${VERSION}" \
     && TARBALL_NAME="LLVM-${VERSION}-Linux-X64.tar.xz" \
     && TARBALL_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${VERSION}/${TARBALL_NAME}" \
-    && EXPECTED_SHA256=$(echo "$LATEST_RELEASE" | jq -r \
-        --arg name "$TARBALL_NAME" \
+    && EXPECTED_SHA256=$(echo "$LATEST_RELEASE" | jq -r --arg name "$TARBALL_NAME" \
         '.assets[] | select(.name == $name) | .digest // empty' | sed 's/^sha256://') \
     && wget -q "${TARBALL_URL}" -O /tmp/llvm.tar.xz \
     && if [ -n "${EXPECTED_SHA256}" ]; then \
@@ -391,10 +380,8 @@ RUN set -eux \
             echo "  实际: ${ACTUAL_SHA256}" >&2; \
             exit 1; \
         fi; \
-        echo "    SHA256 verification passed ✓"; \
     fi \
     && FILE_SIZE=$(stat -c%s /tmp/llvm.tar.xz) \
-    && echo "==> Downloaded: $(du -h /tmp/llvm.tar.xz | cut -f1)" \
     && if [ "${FILE_SIZE}" -lt 100000000 ]; then \
         echo "FATAL: 文件太小 (${FILE_SIZE} bytes)" >&2; \
         exit 1; \
@@ -532,7 +519,6 @@ set -eux
 DEFAULT_BRANCH=$(git -C "${VCPKG_ROOT}" remote show origin | awk '/HEAD branch/ {print $NF}')
 
 if git -C "${VCPKG_ROOT}" rev-parse --is-shallow-repository | grep -q true; then
-    echo "==> Detected shallow vcpkg clone, unshallowing..."
     git -C "${VCPKG_ROOT}" fetch --quiet --unshallow origin "${DEFAULT_BRANCH}"
 else
     git -C "${VCPKG_ROOT}" fetch --quiet origin "${DEFAULT_BRANCH}"
@@ -546,7 +532,6 @@ vcpkg --version
 # 用当前 HEAD commit sha 作为 builtin-baseline，动态生成 vcpkg.json
 #    不写死版本号，每次构建都对应当时 vcpkg registry 的最新状态
 BASELINE=$(git -C "${VCPKG_ROOT}" rev-parse HEAD)
-echo "==> Resolved latest vcpkg builtin-baseline: ${BASELINE}"
 jq --arg baseline "${BASELINE}" '.["builtin-baseline"] = $baseline' \
     /home/vscode/.vcpkg-manifest/vcpkg.json.in > /home/vscode/.vcpkg-manifest/vcpkg.json
 cat /home/vscode/.vcpkg-manifest/vcpkg.json
