@@ -361,15 +361,15 @@ RUN set -eux \
 #   - LLVM 20+ 官方 Linux x86_64 包名固定为 LLVM-{VERSION}-Linux-X64.tar.xz
 #   - 包含 SHA256 校验和验证，确保下载完整性
 #   - 解压到 /usr/local，与系统 GCC 的 /usr/bin 完全隔离
-#   - 官方 LLVM-*.tar.xz 包含 clang, clang++, lld, lldb, clangd,
-#     clang-tidy, clang-format 等全套工具链
-#   - 验证部分包含 x86_64 原生编译和 ARM64 交叉编译测试
+#   - 交叉编译验证：不使用 --sysroot（Debian 多架构布局不兼容 clang 的 sysroot 约定），
+#     让 clang 通过 --target 和 --gcc-toolchain 自动查找正确的头文件和库路径
 RUN set -eux \
     && LATEST_RELEASE=$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest) \
-    && VERSION=$(echo "$LATEST_RELEASE" | jq -r '.tag_name' | sed 's/^llvmorg-//') \
+    && VERSION=$(echo "${LATEST_RELEASE}" | jq -r '.tag_name' | sed 's/^llvmorg-//') \
     && TARBALL_NAME="LLVM-${VERSION}-Linux-X64.tar.xz" \
     && TARBALL_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${VERSION}/${TARBALL_NAME}" \
-    && EXPECTED_SHA256=$(echo "$LATEST_RELEASE" | jq -r --arg name "$TARBALL_NAME" \
+    && EXPECTED_SHA256=$(echo "${LATEST_RELEASE}" | jq -r \
+        --arg name "${TARBALL_NAME}" \
         '.assets[] | select(.name == $name) | .digest // empty' | sed 's/^sha256://') \
     && wget -q "${TARBALL_URL}" -O /tmp/llvm.tar.xz \
     && if [ -n "${EXPECTED_SHA256}" ]; then \
@@ -407,18 +407,18 @@ RUN set -eux \
     && /tmp/test_x86 \
     && /tmp/test_x86_cpp \
     && clang --target=aarch64-linux-gnu \
-             --sysroot=/usr/aarch64-linux-gnu \
              --gcc-toolchain=/usr \
              /tmp/test.c -o /tmp/test_arm64 \
              -fuse-ld=lld \
     && file /tmp/test_arm64 | grep -q "ARM aarch64" \
     && clang++ --target=aarch64-linux-gnu \
-               --sysroot=/usr/aarch64-linux-gnu \
                --gcc-toolchain=/usr \
                /tmp/test.cpp -o /tmp/test_arm64_cpp \
                -fuse-ld=lld \
     && file /tmp/test_arm64_cpp | grep -q "ARM aarch64" \
-    && rm -f /tmp/test.c /tmp/test.cpp /tmp/test_x86 /tmp/test_x86_cpp /tmp/test_arm64 /tmp/test_arm64_cpp \
+    && rm -f /tmp/test.c /tmp/test.cpp \
+              /tmp/test_x86 /tmp/test_x86_cpp \
+              /tmp/test_arm64 /tmp/test_arm64_cpp \
     && gcc --version \
     && g++ --version \
     && aarch64-linux-gnu-gcc --version \
