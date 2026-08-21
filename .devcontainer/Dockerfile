@@ -354,52 +354,27 @@ RUN set -eux \
     " \
     && ln -sf /usr/local/bin/ninja /usr/bin/ninja
 
-# LLVM/Clang 工具链：直接从 GitHub 下载最新预编译二进制包
-#
-# 设计要点：
-#   - 完全绕过 apt 依赖管理，避免与 GCC 16 交叉编译工具链的 libc6 版本冲突
-#   - LLVM 20+ 官方 Linux x86_64 包名固定为 LLVM-{VERSION}-Linux-X64.tar.xz
-#   - 包含 SHA256 校验和验证，确保下载完整性
-#   - 解压到 /usr/local，与系统 GCC 的 /usr/bin 完全隔离
-#   - 交叉编译验证：不使用 --sysroot（Debian 多架构布局不兼容 clang 的 sysroot 约定），
-#     让 clang 通过 --target 和 --gcc-toolchain 自动查找正确的头文件和库路径
+# LLVM/Clang 工具链：使用 apt.llvm.org 仓库，安装核心工具并避开 libclang-rt
 RUN set -eux \
-    && echo "deb http://deb.debian.org/debian unstable main" \
-        > /etc/apt/sources.list.d/unstable.list \
-    && printf 'Package: *\nPin: release a=unstable\nPin-Priority: 100\n' \
-        > /etc/apt/preferences.d/unstable-pin \
-    && apt-get update \
-    && apt-get -yq install --no-install-recommends -t unstable \
-        libpython3.11 \
-    && rm -f /etc/apt/sources.list.d/unstable.list /etc/apt/preferences.d/unstable-pin \
-    && apt-get update \
-    && apt-get -yq install --no-install-recommends \
-        libedit2 \
-        libxml2 \
-        zlib1g \
-        libzstd1 \
+    && LLVM_LATEST=$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest \
+         | grep -Po '"tag_name":\s*"llvmorg-\K[0-9]+') \
+    && curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh \
+    && chmod +x /tmp/llvm.sh \
+    && /tmp/llvm.sh "${LLVM_LATEST}" \
+    && apt-get install -y --no-install-recommends \
+        clang-format-${LLVM_LATEST} \
+        clang-tidy-${LLVM_LATEST} \
+        clang-tools-${LLVM_LATEST} \
+    && rm -f /tmp/llvm.sh \
+    && apt-get autoremove -y \
     && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest \
-        -o /tmp/llvm_release.json \
-    && VERSION=$(jq -r '.tag_name' /tmp/llvm_release.json | sed 's/^llvmorg-//') \
-    && TARBALL_NAME="LLVM-${VERSION}-Linux-X64.tar.xz" \
-    && TARBALL_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${VERSION}/${TARBALL_NAME}" \
-    && EXPECTED_SHA256=$(jq -r \
-        --arg name "${TARBALL_NAME}" \
-        '.assets[] | select(.name == $name) | .digest // empty' /tmp/llvm_release.json \
-        | sed 's/^sha256://') \
-    && wget -q "${TARBALL_URL}" -O /tmp/llvm.tar.xz \
-    && if [ -n "${EXPECTED_SHA256}" ]; then \
-        ACTUAL_SHA256=$(sha256sum /tmp/llvm.tar.xz | awk '{print $1}'); \
-        [ "${ACTUAL_SHA256}" = "${EXPECTED_SHA256}" ] || exit 1; \
-    fi \
-    && [ "$(stat -c%s /tmp/llvm.tar.xz)" -gt 100000000 ] || exit 1 \
-    && tar -xf /tmp/llvm.tar.xz -C /usr/local --strip-components=1 \
-    && rm -f /tmp/llvm.tar.xz /tmp/llvm_release.json \
-    && for tool in clang clang++ clang-format clang-tidy clangd lldb llvm-config ld.lld llvm-ar llvm-nm; do \
-        ldd "$(command -v ${tool})" 2>&1 | grep -q "not found" && exit 1 || true; \
-    done \
+    && for tool in clang clang++ clang-format clang-tidy clangd lldb lld llvm-config; do \
+         src="/usr/bin/${tool}-${LLVM_LATEST}"; \
+         if [ -x "${src}" ]; then \
+           ln -sf "${src}" "/usr/local/bin/${tool}"; \
+         fi; \
+       done \
     && clang --version \
     && clang++ --version \
     && clang-format --version \
@@ -408,16 +383,13 @@ RUN set -eux \
     && lldb --version \
     && llvm-config --version \
     && command -v ld.lld \
-    && command -v llvm-ar \
-    && command -v llvm-nm \
     && echo 'int main() { return 0; }' > /tmp/test.c \
     && echo 'int main() { return 0; }' > /tmp/test.cpp \
     && clang /tmp/test.c -o /tmp/test_x86 \
     && clang++ /tmp/test.cpp -o /tmp/test_x86_cpp \
     && file /tmp/test_x86 | grep -q "x86-64" \
     && file /tmp/test_x86_cpp | grep -q "x86-64" \
-    && /tmp/test_x86 \
-    && /tmp/test_x86_cpp \
+    && /tmp/test_x86 && /tmp/test_x86_cpp \
     && clang --target=aarch64-linux-gnu \
              --gcc-toolchain=/usr \
              /tmp/test.c -o /tmp/test_arm64 \
@@ -434,10 +406,7 @@ RUN set -eux \
     && gcc --version \
     && g++ --version \
     && aarch64-linux-gnu-gcc --version \
-    && aarch64-linux-gnu-g++ --version \
-    && apt-get autoremove -y \
-    && apt-get clean -y \
-    && rm -rf /var/lib/apt/lists/*
+    && aarch64-linux-gnu-g++ --version
 
 # Microsoft OpenJDK 21：从 distroless 镜像拷贝，
 # 保留 JDK 是为了运行第三方 Java 工具链，不是本环境的开发核心
