@@ -364,12 +364,20 @@ RUN set -eux \
 #   - 交叉编译验证：不使用 --sysroot（Debian 多架构布局不兼容 clang 的 sysroot 约定），
 #     让 clang 通过 --target 和 --gcc-toolchain 自动查找正确的头文件和库路径
 RUN set -eux \
+    && apt-get update \
+    && apt-get -yq install --no-install-recommends \
+        libpython3.11 \
+        libedit2 \
+        libxml2 \
+        zlib1g \
+        libzstd1 \
+    && apt-get clean -y \
+    && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest \
         -o /tmp/llvm_release.json \
     && VERSION=$(jq -r '.tag_name' /tmp/llvm_release.json | sed 's/^llvmorg-//') \
     && if [ -z "${VERSION}" ]; then \
         echo "FATAL: 未能解析 LLVM 版本号" >&2; \
-        echo "API 响应内容：" >&2; \
         head -20 /tmp/llvm_release.json >&2; \
         exit 1; \
     fi \
@@ -390,13 +398,21 @@ RUN set -eux \
         fi; \
     fi \
     && FILE_SIZE=$(stat -c%s /tmp/llvm.tar.xz) \
-    && echo "==> Downloaded: $(du -h /tmp/llvm.tar.xz | cut -f1)" \
     && if [ "${FILE_SIZE}" -lt 100000000 ]; then \
         echo "FATAL: 文件太小 (${FILE_SIZE} bytes)" >&2; \
         exit 1; \
     fi \
     && tar -xf /tmp/llvm.tar.xz -C /usr/local --strip-components=1 \
     && rm -f /tmp/llvm.tar.xz /tmp/llvm_release.json \
+    && for tool in clang clang++ clang-format clang-tidy clangd lldb llvm-config ld.lld llvm-ar llvm-nm; do \
+        if command -v "${tool}" >/dev/null 2>&1; then \
+            echo "--- ${tool} dependencies:"; \
+            ldd "$(command -v ${tool})" 2>&1 | grep -E "not found" && { \
+                echo "FATAL: ${tool} 有缺失的动态库依赖！" >&2; \
+                exit 1; \
+            } || echo "    ✓ All dependencies satisfied"; \
+        fi; \
+    done \
     && clang --version \
     && clang++ --version \
     && clang-format --version \
