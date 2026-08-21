@@ -139,10 +139,8 @@ RUN set -eux \
 #     装完立即移除该源，避免后续任何 apt 操作误从 unstable 升级其它包
 #   - 同时安装 libgcc-16-dev / libstdc++-16-dev，确保头文件和运行时库完整，
 #     避免 vcpkg 交叉编译 arm64 triplet 时找不到对应版本的 libgcc/libstdc++
-#   - 先检查所有 slave 二进制存在性，再执行 update-alternatives 注册，
-#     防止部分注册后失败导致 alternatives 数据库处于不一致状态
-#   - gcc-16/g++-16 以更高优先级注册进同一个 alternatives 组，并显式 --set
-#     为默认，保证非交互式构建结果确定、可复现
+#   - cpp 在 Debian 中是独立的主 alternative（由 cpp-XX 包注册），
+#     不能作为 gcc 的 slave，必须单独注册为一个 alternative 组
 #   - cc/c++ 直接软链到 /usr/bin/gcc、/usr/bin/g++（alternatives 的总入口），
 #     会自动跟随当前 gcc/g++ 的选择，无需单独维护一套 alternatives
 #   - LLVM/Clang 全系列工具链完全不受影响，仍走 /usr/local/bin 的独立软链
@@ -153,71 +151,91 @@ RUN set -eux \
     && echo "==> Detected default GCC version: ${DEFAULT_GCC_VER}" \
     && echo "==> Default GCC binary: ${DEFAULT_GCC_BIN}" \
     && echo "==> Default GXX binary: ${DEFAULT_GXX_BIN}" \
+    # 添加 unstable 源 + APT Pinning（低优先级，防止污染其他包）
     && echo "deb http://deb.debian.org/debian unstable main" \
         > /etc/apt/sources.list.d/unstable.list \
     && printf 'Package: *\nPin: release a=unstable\nPin-Priority: 100\n' \
         > /etc/apt/preferences.d/unstable-pin \
     && apt-get update \
+    # 从 unstable 安装 GCC 16 及其开发库
     && apt-get -yq install --no-install-recommends -t unstable \
         "gcc-${GCC_EXTRA_MAJOR_VERSION}" \
         "g++-${GCC_EXTRA_MAJOR_VERSION}" \
         "cpp-${GCC_EXTRA_MAJOR_VERSION}" \
         "libgcc-${GCC_EXTRA_MAJOR_VERSION}-dev" \
         "libstdc++-${GCC_EXTRA_MAJOR_VERSION}-dev" \
+    # 立即移除 unstable 源和 pinning 配置，避免影响后续 apt 操作
     && rm -f /etc/apt/sources.list.d/unstable.list /etc/apt/preferences.d/unstable-pin \
     && apt-get update \
     && apt-get autoremove -y \
     && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/* \
+    # 检查所有 slave 二进制存在性（两个版本都检查），确保 alternatives 注册不会半途失败
+    # 注意：cpp 不在此列表中，因为它不是 gcc 的 slave
     && for slave_bin in \
-       "/usr/bin/cpp-${DEFAULT_GCC_VER}" \
        "/usr/bin/gcc-ar-${DEFAULT_GCC_VER}" \
        "/usr/bin/gcc-nm-${DEFAULT_GCC_VER}" \
        "/usr/bin/gcc-ranlib-${DEFAULT_GCC_VER}" \
        "/usr/bin/gcov-${DEFAULT_GCC_VER}" \
        "/usr/bin/gcov-dump-${DEFAULT_GCC_VER}" \
        "/usr/bin/gcov-tool-${DEFAULT_GCC_VER}" \
-       "/usr/bin/cpp-${GCC_EXTRA_MAJOR_VERSION}" \
+       "/usr/bin/cpp-${DEFAULT_GCC_VER}" \
        "/usr/bin/gcc-ar-${GCC_EXTRA_MAJOR_VERSION}" \
        "/usr/bin/gcc-nm-${GCC_EXTRA_MAJOR_VERSION}" \
        "/usr/bin/gcc-ranlib-${GCC_EXTRA_MAJOR_VERSION}" \
        "/usr/bin/gcov-${GCC_EXTRA_MAJOR_VERSION}" \
        "/usr/bin/gcov-dump-${GCC_EXTRA_MAJOR_VERSION}" \
-       "/usr/bin/gcov-tool-${GCC_EXTRA_MAJOR_VERSION}"; do \
+       "/usr/bin/gcov-tool-${GCC_EXTRA_MAJOR_VERSION}" \
+       "/usr/bin/cpp-${GCC_EXTRA_MAJOR_VERSION}"; do \
        if [ ! -x "${slave_bin}" ]; then \
-           echo "FATAL: 预期的 GCC slave 二进制 ${slave_bin} 不存在" >&2; \
+           echo "FATAL: 预期的二进制 ${slave_bin} 不存在" >&2; \
            exit 1; \
        fi; \
        echo "    OK: ${slave_bin}"; \
     done \
+    # 注册系统默认 GCC（较低优先级，如 gcc-14 → 140）
+    # 注意：cpp 不作为 slave，因为它是 Debian 中的独立主 alternative
     && update-alternatives --install /usr/bin/gcc gcc "${DEFAULT_GCC_BIN}" "$((DEFAULT_GCC_VER * 10))" \
         --slave /usr/bin/g++        g++         "${DEFAULT_GXX_BIN}" \
-        --slave /usr/bin/cpp        cpp         "/usr/bin/cpp-${DEFAULT_GCC_VER}" \
         --slave /usr/bin/gcc-ar     gcc-ar      "/usr/bin/gcc-ar-${DEFAULT_GCC_VER}" \
         --slave /usr/bin/gcc-nm     gcc-nm      "/usr/bin/gcc-nm-${DEFAULT_GCC_VER}" \
         --slave /usr/bin/gcc-ranlib gcc-ranlib  "/usr/bin/gcc-ranlib-${DEFAULT_GCC_VER}" \
         --slave /usr/bin/gcov       gcov        "/usr/bin/gcov-${DEFAULT_GCC_VER}" \
         --slave /usr/bin/gcov-dump  gcov-dump   "/usr/bin/gcov-dump-${DEFAULT_GCC_VER}" \
         --slave /usr/bin/gcov-tool  gcov-tool   "/usr/bin/gcov-tool-${DEFAULT_GCC_VER}" \
+    # 注册 GCC 16（较高优先级，160 > 140，自动成为 auto 模式下的默认）
     && update-alternatives --install /usr/bin/gcc gcc "/usr/bin/gcc-${GCC_EXTRA_MAJOR_VERSION}" "$((GCC_EXTRA_MAJOR_VERSION * 10))" \
         --slave /usr/bin/g++        g++         "/usr/bin/g++-${GCC_EXTRA_MAJOR_VERSION}" \
-        --slave /usr/bin/cpp        cpp         "/usr/bin/cpp-${GCC_EXTRA_MAJOR_VERSION}" \
         --slave /usr/bin/gcc-ar     gcc-ar      "/usr/bin/gcc-ar-${GCC_EXTRA_MAJOR_VERSION}" \
         --slave /usr/bin/gcc-nm     gcc-nm      "/usr/bin/gcc-nm-${GCC_EXTRA_MAJOR_VERSION}" \
         --slave /usr/bin/gcc-ranlib gcc-ranlib  "/usr/bin/gcc-ranlib-${GCC_EXTRA_MAJOR_VERSION}" \
         --slave /usr/bin/gcov       gcov        "/usr/bin/gcov-${GCC_EXTRA_MAJOR_VERSION}" \
         --slave /usr/bin/gcov-dump  gcov-dump   "/usr/bin/gcov-dump-${GCC_EXTRA_MAJOR_VERSION}" \
         --slave /usr/bin/gcov-tool  gcov-tool   "/usr/bin/gcov-tool-${GCC_EXTRA_MAJOR_VERSION}" \
+    # 显式 --set 确保非交互式构建结果确定
     && update-alternatives --set gcc "/usr/bin/gcc-${GCC_EXTRA_MAJOR_VERSION}" \
+    # cpp 是 Debian 中的独立主 alternative，需要单独注册为一个 alternative 组
+    # 如果 cpp-16 包已经自动注册了，这里会更新优先级；如果没有注册，这里会新增
+    && update-alternatives --install /usr/bin/cpp cpp "/usr/bin/cpp-${DEFAULT_GCC_VER}" "$((DEFAULT_GCC_VER * 10))" \
+    && update-alternatives --install /usr/bin/cpp cpp "/usr/bin/cpp-${GCC_EXTRA_MAJOR_VERSION}" "$((GCC_EXTRA_MAJOR_VERSION * 10))" \
+    && update-alternatives --set cpp "/usr/bin/cpp-${GCC_EXTRA_MAJOR_VERSION}" \
+    # cc/c++ 软链到 alternatives 总入口，自动跟随 gcc/g++ 切换
     && ln -sf /usr/bin/gcc /usr/bin/cc \
     && ln -sf /usr/bin/g++ /usr/bin/c++ \
+    # 验证
+    && echo "==> GCC alternatives:" \
     && update-alternatives --display gcc \
+    && echo "==> CPP alternatives:" \
+    && update-alternatives --display cpp \
     && gcc --version \
     && g++ --version \
     && cc  --version \
     && c++ --version \
+    && cpp --version \
     && "gcc-${DEFAULT_GCC_VER}" --version \
-    && "g++-${DEFAULT_GCC_VER}" --version
+    && "g++-${DEFAULT_GCC_VER}" --version \
+    && "gcc-${GCC_EXTRA_MAJOR_VERSION}" --version \
+    && "g++-${GCC_EXTRA_MAJOR_VERSION}" --version
 
 # .NET 10 LTS
 RUN set -eux \
@@ -458,12 +476,16 @@ RUN su vscode -c '\
         set -eux \
         && echo "PATH=$PATH" \
         && echo "VCPKG_ROOT=$VCPKG_ROOT" \
+        && echo "=== GCC 默认版本 ===" \
         && gcc --version \
         && g++ --version \
+        && cpp --version \
+        && echo "=== GCC 多版本共存验证 ===" \
         && gcc-14 --version || true \
         && g++-14 --version || true \
         && gcc-16 --version || true \
         && g++-16 --version || true \
+        && echo "=== Clang 不受影响验证 ===" \
         && clang --version \
         && clang++ --version \
     '
