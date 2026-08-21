@@ -363,28 +363,44 @@ RUN set -eux \
     " \
     && ln -sf /usr/local/bin/ninja /usr/bin/ninja
 
-# LLVM/Clang 工具链：编译器（clang/clang++）、链接器（lld）、调试器（lldb）、
-# 代码分析/格式化工具（clang-format/clang-tidy/clangd/clang-query/scan-build 等）
+# LLVM/Clang 工具链：直接从 GitHub 下载最新预编译二进制包
+#
+# 设计要点：
+#   - 完全绕过 apt 依赖管理，避免与 GCC 16 交叉编译工具链的 libc6 版本冲突
+#   - LLVM 20+ 官方 Linux x86_64 包名固定为 LLVM-{VERSION}-Linux-X64.tar.xz
+#   - 包含 SHA256 校验和验证，确保下载完整性
+#   - 解压到 /usr/local，与系统 GCC 的 /usr/bin 完全隔离
+#   - 官方 LLVM-*.tar.xz 包含 clang, clang++, lld, lldb, clangd,
+#     clang-tidy, clang-format 等全套工具链
+#   - 验证部分包含 x86_64 原生编译和 ARM64 交叉编译测试
 RUN set -eux \
-    && apt-get update \
-    && LLVM_LATEST=$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest \
-         | grep -Po '"tag_name":\s*"llvmorg-\K[0-9]+') \
-    && echo "==> Resolved latest LLVM major version: ${LLVM_LATEST}" \
-    && curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh \
-    && chmod +x /tmp/llvm.sh \
-    && /tmp/llvm.sh "${LLVM_LATEST}" all \
-    && rm -f /tmp/llvm.sh \
-    && LLVM_BIN_DIR="/usr/lib/llvm-${LLVM_LATEST}/bin" \
-    && if [ ! -d "${LLVM_BIN_DIR}" ]; then \
-        echo "FATAL: 预期的 LLVM 二进制目录 ${LLVM_BIN_DIR} 不存在，安装可能未成功" >&2; \
+    && LATEST_RELEASE=$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest) \
+    && VERSION=$(echo "$LATEST_RELEASE" | jq -r '.tag_name' | sed 's/^llvmorg-//') \
+    && echo "==> Resolved latest LLVM version: ${VERSION}" \
+    && TARBALL_NAME="LLVM-${VERSION}-Linux-X64.tar.xz" \
+    && TARBALL_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${VERSION}/${TARBALL_NAME}" \
+    && EXPECTED_SHA256=$(echo "$LATEST_RELEASE" | jq -r \
+        --arg name "$TARBALL_NAME" \
+        '.assets[] | select(.name == $name) | .digest // empty' | sed 's/^sha256://') \
+    && wget -q "${TARBALL_URL}" -O /tmp/llvm.tar.xz \
+    && if [ -n "${EXPECTED_SHA256}" ]; then \
+        ACTUAL_SHA256=$(sha256sum /tmp/llvm.tar.xz | awk '{print $1}'); \
+        if [ "${ACTUAL_SHA256}" != "${EXPECTED_SHA256}" ]; then \
+            echo "FATAL: SHA256 校验失败" >&2; \
+            echo "  期望: ${EXPECTED_SHA256}" >&2; \
+            echo "  实际: ${ACTUAL_SHA256}" >&2; \
+            exit 1; \
+        fi; \
+        echo "    SHA256 verification passed ✓"; \
+    fi \
+    && FILE_SIZE=$(stat -c%s /tmp/llvm.tar.xz) \
+    && echo "==> Downloaded: $(du -h /tmp/llvm.tar.xz | cut -f1)" \
+    && if [ "${FILE_SIZE}" -lt 100000000 ]; then \
+        echo "FATAL: 文件太小 (${FILE_SIZE} bytes)" >&2; \
         exit 1; \
     fi \
-    && for f in "${LLVM_BIN_DIR}"/*; do \
-        [ -f "$f" ] && [ -x "$f" ] && ln -sf "$f" "/usr/local/bin/$(basename "$f")"; \
-    done \
-    && apt-get autoremove -y \
-    && apt-get clean -y \
-    && rm -rf /var/lib/apt/lists/* \
+    && tar -xf /tmp/llvm.tar.xz -C /usr/local --strip-components=1 \
+    && rm -f /tmp/llvm.tar.xz \
     && clang --version \
     && clang++ --version \
     && clang-format --version \
@@ -393,8 +409,36 @@ RUN set -eux \
     && lldb --version \
     && llvm-config --version \
     && command -v ld.lld \
+    && command -v llvm-ar \
+    && command -v llvm-nm \
+    && echo 'int main() { return 0; }' > /tmp/test.c \
+    && echo 'int main() { return 0; }' > /tmp/test.cpp \
+    && clang /tmp/test.c -o /tmp/test_x86 \
+    && clang++ /tmp/test.cpp -o /tmp/test_x86_cpp \
+    && file /tmp/test_x86 | grep -q "x86-64" \
+    && file /tmp/test_x86_cpp | grep -q "x86-64" \
+    && /tmp/test_x86 \
+    && /tmp/test_x86_cpp \
+    && clang --target=aarch64-linux-gnu \
+             --sysroot=/usr/aarch64-linux-gnu \
+             --gcc-toolchain=/usr \
+             /tmp/test.c -o /tmp/test_arm64 \
+             -fuse-ld=lld \
+    && file /tmp/test_arm64 | grep -q "ARM aarch64" \
+    && clang++ --target=aarch64-linux-gnu \
+               --sysroot=/usr/aarch64-linux-gnu \
+               --gcc-toolchain=/usr \
+               /tmp/test.cpp -o /tmp/test_arm64_cpp \
+               -fuse-ld=lld \
+    && file /tmp/test_arm64_cpp | grep -q "ARM aarch64" \
+    && rm -f /tmp/test.c /tmp/test.cpp /tmp/test_x86 /tmp/test_x86_cpp /tmp/test_arm64 /tmp/test_arm64_cpp \
     && gcc --version \
-    && g++ --version
+    && g++ --version \
+    && aarch64-linux-gnu-gcc --version \
+    && aarch64-linux-gnu-g++ --version \
+    && apt-get autoremove -y \
+    && apt-get clean -y \
+    && rm -rf /var/lib/apt/lists/*
 
 # Microsoft OpenJDK 21：从 distroless 镜像拷贝，
 # 保留 JDK 是为了运行第三方 Java 工具链，不是本环境的开发核心
