@@ -4,6 +4,7 @@
 ARG JDK_MAJOR_VERSION=21
 ARG NODE_VARIANT=lts
 ARG VARIANT=debian13
+ARG GCC_EXTRA_MAJOR_VERSION=16
 
 # 辅助阶段：Microsoft OpenJDK（distroless，实际路径 /usr/jdk）
 FROM mcr.microsoft.com/openjdk/jdk:${JDK_MAJOR_VERSION}-distroless AS jdk-src
@@ -14,8 +15,8 @@ FROM node:${NODE_VARIANT} AS node-src
 
 # 辅助阶段：架构防御检测
 # 此镜像的交叉编译工具链 / vcpkg triplet 均按 amd64 宿主机硬编码
-# 若基础镜像被解析为非 amd64（例如在 arm64 宿主机上未加 --platform 直接构建），立即报错终止，避免后续在 vcpkg 阶段才出现难以定位的失败
-# 使用独立 stage 检测，不依赖主阶段基础镜像是否自带 dpkg
+# 若基础镜像被解析为非 amd64（例如在 arm64 宿主机上未加 --platform 直接构建），立即报错终止
+# 检测通过后生成标记文件 /arch-ok，主阶段通过 COPY --from 强制依赖此阶段，确保检测必然执行
 FROM mcr.microsoft.com/devcontainers/base:${VARIANT} AS arch-check
 RUN set -eux \
     && ARCH="$(dpkg --print-architecture)" \
@@ -23,14 +24,21 @@ RUN set -eux \
         echo "FATAL: 此 Dockerfile 仅支持 amd64 基础镜像构建，检测到当前架构为 ${ARCH}" >&2; \
         echo "请在 x86_64 宿主机上构建，或使用 --platform linux/amd64 强制模拟" >&2; \
         exit 1; \
-    fi
+    fi \
+    && touch /arch-ok
 
 # 主阶段
 # 基于 devcontainers/base 而非 devcontainers/cpp
 FROM mcr.microsoft.com/devcontainers/base:${VARIANT}
 
+# 强制依赖 arch-check 阶段：只有该阶段构建成功（架构检测通过）才会执行到这里
+COPY --from=arch-check /arch-ok /arch-ok
+
 # 让 vscode 对 /usr/local/bin 有写权限（uv tool install 的 BIN_DIR 指向此处）
-RUN chown vscode:vscode /usr/local/bin
+# 同时清理架构检测的临时标记文件
+RUN set -eux \
+    && rm -f /arch-ok \
+    && chown vscode:vscode /usr/local/bin
 
 # 基础系统包
 # 编译工具链
@@ -115,6 +123,98 @@ RUN set -eux \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p "${CCACHE_DIR}" \
     && chown -R vscode:vscode "${CCACHE_DIR}"
+
+# GCC 16：手动新增第二套 GCC 工具链，注册为系统默认 c/c++ 编译器
+#
+# 设计要点：
+#   - 保留 build-essential 附带的"系统默认 gcc/g++"（版本不固定，随基础镜像滚动），
+#     动态探测其版本号与真实二进制路径，以较低优先级注册进 update-alternatives，
+#     不卸载、不覆盖，任何时候都能用 `update-alternatives --config gcc` 手动切回去
+#   - trixie 稳定源通常还没有 gcc-16，需从 Debian unstable 单独拉取：
+#     新增 unstable 源并用 APT Pinning 钉在低优先级（100），只对本次
+#     `-t unstable` 显式安装的包生效，不会污染系统其余软件包版本；
+#     装完立即移除该源，避免后续任何 apt 操作误从 unstable 升级其它包
+#   - 同时安装 libgcc-16-dev / libstdc++-16-dev，确保头文件和运行时库完整，
+#     避免 vcpkg 交叉编译 arm64 triplet 时找不到对应版本的 libgcc/libstdc++
+#   - 先检查所有 slave 二进制存在性，再执行 update-alternatives 注册，
+#     防止部分注册后失败导致 alternatives 数据库处于不一致状态
+#   - gcc-16/g++-16 以更高优先级注册进同一个 alternatives 组，并显式 --set
+#     为默认，保证非交互式构建结果确定、可复现
+#   - cc/c++ 直接软链到 /usr/bin/gcc、/usr/bin/g++（alternatives 的总入口），
+#     会自动跟随当前 gcc/g++ 的选择，无需单独维护一套 alternatives
+#   - LLVM/Clang 全系列工具链完全不受影响，仍走 /usr/local/bin 的独立软链
+RUN set -eux \
+    && DEFAULT_GCC_VER="$(gcc -dumpversion | cut -d. -f1)" \
+    && DEFAULT_GCC_BIN="$(readlink -f "$(command -v gcc)")" \
+    && DEFAULT_GXX_BIN="$(readlink -f "$(command -v g++)")" \
+    && echo "==> Detected default GCC version: ${DEFAULT_GCC_VER}" \
+    && echo "==> Default GCC binary: ${DEFAULT_GCC_BIN}" \
+    && echo "==> Default GXX binary: ${DEFAULT_GXX_BIN}" \
+    && echo "deb http://deb.debian.org/debian unstable main" \
+        > /etc/apt/sources.list.d/unstable.list \
+    && printf 'Package: *\nPin: release a=unstable\nPin-Priority: 100\n' \
+        > /etc/apt/preferences.d/unstable-pin \
+    && apt-get update \
+    && apt-get -yq install --no-install-recommends -t unstable \
+        "gcc-${GCC_EXTRA_MAJOR_VERSION}" \
+        "g++-${GCC_EXTRA_MAJOR_VERSION}" \
+        "cpp-${GCC_EXTRA_MAJOR_VERSION}" \
+        "libgcc-${GCC_EXTRA_MAJOR_VERSION}-dev" \
+        "libstdc++-${GCC_EXTRA_MAJOR_VERSION}-dev" \
+    && rm -f /etc/apt/sources.list.d/unstable.list /etc/apt/preferences.d/unstable-pin \
+    && apt-get update \
+    && apt-get autoremove -y \
+    && apt-get clean -y \
+    && rm -rf /var/lib/apt/lists/* \
+    && for slave_bin in \
+       "/usr/bin/cpp-${DEFAULT_GCC_VER}" \
+       "/usr/bin/gcc-ar-${DEFAULT_GCC_VER}" \
+       "/usr/bin/gcc-nm-${DEFAULT_GCC_VER}" \
+       "/usr/bin/gcc-ranlib-${DEFAULT_GCC_VER}" \
+       "/usr/bin/gcov-${DEFAULT_GCC_VER}" \
+       "/usr/bin/gcov-dump-${DEFAULT_GCC_VER}" \
+       "/usr/bin/gcov-tool-${DEFAULT_GCC_VER}" \
+       "/usr/bin/cpp-${GCC_EXTRA_MAJOR_VERSION}" \
+       "/usr/bin/gcc-ar-${GCC_EXTRA_MAJOR_VERSION}" \
+       "/usr/bin/gcc-nm-${GCC_EXTRA_MAJOR_VERSION}" \
+       "/usr/bin/gcc-ranlib-${GCC_EXTRA_MAJOR_VERSION}" \
+       "/usr/bin/gcov-${GCC_EXTRA_MAJOR_VERSION}" \
+       "/usr/bin/gcov-dump-${GCC_EXTRA_MAJOR_VERSION}" \
+       "/usr/bin/gcov-tool-${GCC_EXTRA_MAJOR_VERSION}"; do \
+       if [ ! -x "${slave_bin}" ]; then \
+           echo "FATAL: 预期的 GCC slave 二进制 ${slave_bin} 不存在" >&2; \
+           exit 1; \
+       fi; \
+       echo "    OK: ${slave_bin}"; \
+    done \
+    && update-alternatives --install /usr/bin/gcc gcc "${DEFAULT_GCC_BIN}" "$((DEFAULT_GCC_VER * 10))" \
+        --slave /usr/bin/g++        g++         "${DEFAULT_GXX_BIN}" \
+        --slave /usr/bin/cpp        cpp         "/usr/bin/cpp-${DEFAULT_GCC_VER}" \
+        --slave /usr/bin/gcc-ar     gcc-ar      "/usr/bin/gcc-ar-${DEFAULT_GCC_VER}" \
+        --slave /usr/bin/gcc-nm     gcc-nm      "/usr/bin/gcc-nm-${DEFAULT_GCC_VER}" \
+        --slave /usr/bin/gcc-ranlib gcc-ranlib  "/usr/bin/gcc-ranlib-${DEFAULT_GCC_VER}" \
+        --slave /usr/bin/gcov       gcov        "/usr/bin/gcov-${DEFAULT_GCC_VER}" \
+        --slave /usr/bin/gcov-dump  gcov-dump   "/usr/bin/gcov-dump-${DEFAULT_GCC_VER}" \
+        --slave /usr/bin/gcov-tool  gcov-tool   "/usr/bin/gcov-tool-${DEFAULT_GCC_VER}" \
+    && update-alternatives --install /usr/bin/gcc gcc "/usr/bin/gcc-${GCC_EXTRA_MAJOR_VERSION}" "$((GCC_EXTRA_MAJOR_VERSION * 10))" \
+        --slave /usr/bin/g++        g++         "/usr/bin/g++-${GCC_EXTRA_MAJOR_VERSION}" \
+        --slave /usr/bin/cpp        cpp         "/usr/bin/cpp-${GCC_EXTRA_MAJOR_VERSION}" \
+        --slave /usr/bin/gcc-ar     gcc-ar      "/usr/bin/gcc-ar-${GCC_EXTRA_MAJOR_VERSION}" \
+        --slave /usr/bin/gcc-nm     gcc-nm      "/usr/bin/gcc-nm-${GCC_EXTRA_MAJOR_VERSION}" \
+        --slave /usr/bin/gcc-ranlib gcc-ranlib  "/usr/bin/gcc-ranlib-${GCC_EXTRA_MAJOR_VERSION}" \
+        --slave /usr/bin/gcov       gcov        "/usr/bin/gcov-${GCC_EXTRA_MAJOR_VERSION}" \
+        --slave /usr/bin/gcov-dump  gcov-dump   "/usr/bin/gcov-dump-${GCC_EXTRA_MAJOR_VERSION}" \
+        --slave /usr/bin/gcov-tool  gcov-tool   "/usr/bin/gcov-tool-${GCC_EXTRA_MAJOR_VERSION}" \
+    && update-alternatives --set gcc "/usr/bin/gcc-${GCC_EXTRA_MAJOR_VERSION}" \
+    && ln -sf /usr/bin/gcc /usr/bin/cc \
+    && ln -sf /usr/bin/g++ /usr/bin/c++ \
+    && update-alternatives --display gcc \
+    && gcc --version \
+    && g++ --version \
+    && cc  --version \
+    && c++ --version \
+    && "gcc-${DEFAULT_GCC_VER}" --version \
+    && "g++-${DEFAULT_GCC_VER}" --version
 
 # .NET 10 LTS
 RUN set -eux \
@@ -355,6 +455,14 @@ RUN su vscode -c '\
         set -eux \
         && echo "PATH=$PATH" \
         && echo "VCPKG_ROOT=$VCPKG_ROOT" \
+        && gcc --version \
+        && g++ --version \
+        && gcc-14 --version || true \
+        && g++-14 --version || true \
+        && gcc-16 --version || true \
+        && g++-16 --version || true \
+        && clang --version \
+        && clang++ --version \
     '
 RUN set -eux \
     && mkdir -p /home/vscode/workspace \
