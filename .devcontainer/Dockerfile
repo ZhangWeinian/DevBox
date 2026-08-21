@@ -364,13 +364,21 @@ RUN set -eux \
 #   - 交叉编译验证：不使用 --sysroot（Debian 多架构布局不兼容 clang 的 sysroot 约定），
 #     让 clang 通过 --target 和 --gcc-toolchain 自动查找正确的头文件和库路径
 RUN set -eux \
-    && LATEST_RELEASE=$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest) \
-    && VERSION=$(echo "${LATEST_RELEASE}" | jq -r '.tag_name' | sed 's/^llvmorg-//') \
+    && curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest \
+        -o /tmp/llvm_release.json \
+    && VERSION=$(jq -r '.tag_name' /tmp/llvm_release.json | sed 's/^llvmorg-//') \
+    && if [ -z "${VERSION}" ]; then \
+        echo "FATAL: 未能解析 LLVM 版本号" >&2; \
+        echo "API 响应内容：" >&2; \
+        head -20 /tmp/llvm_release.json >&2; \
+        exit 1; \
+    fi \
     && TARBALL_NAME="LLVM-${VERSION}-Linux-X64.tar.xz" \
     && TARBALL_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${VERSION}/${TARBALL_NAME}" \
-    && EXPECTED_SHA256=$(echo "${LATEST_RELEASE}" | jq -r \
+    && EXPECTED_SHA256=$(jq -r \
         --arg name "${TARBALL_NAME}" \
-        '.assets[] | select(.name == $name) | .digest // empty' | sed 's/^sha256://') \
+        '.assets[] | select(.name == $name) | .digest // empty' /tmp/llvm_release.json \
+        | sed 's/^sha256://') \
     && wget -q "${TARBALL_URL}" -O /tmp/llvm.tar.xz \
     && if [ -n "${EXPECTED_SHA256}" ]; then \
         ACTUAL_SHA256=$(sha256sum /tmp/llvm.tar.xz | awk '{print $1}'); \
@@ -382,12 +390,13 @@ RUN set -eux \
         fi; \
     fi \
     && FILE_SIZE=$(stat -c%s /tmp/llvm.tar.xz) \
+    && echo "==> Downloaded: $(du -h /tmp/llvm.tar.xz | cut -f1)" \
     && if [ "${FILE_SIZE}" -lt 100000000 ]; then \
         echo "FATAL: 文件太小 (${FILE_SIZE} bytes)" >&2; \
         exit 1; \
     fi \
     && tar -xf /tmp/llvm.tar.xz -C /usr/local --strip-components=1 \
-    && rm -f /tmp/llvm.tar.xz \
+    && rm -f /tmp/llvm.tar.xz /tmp/llvm_release.json \
     && clang --version \
     && clang++ --version \
     && clang-format --version \
