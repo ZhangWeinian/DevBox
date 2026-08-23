@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# 导入镜像 tar 包并启动开发容器
+# 导入镜像 tar 包（支持 .tar 或 .tar.gz）并启动开发容器
 # 用法：
 #   ./import.sh                           # 若本地镜像存在，启动容器并自动挂载 ~/workspace（目录不存在则创建）；否则报错
 #   ./import.sh /path/to/code             # 若本地镜像存在，启动容器并挂载指定目录；否则报错
-#   ./import.sh myimage.tar               # 加载 tar，删除旧容器/镜像，启动新容器并自动挂载 ~/workspace（目录不存在则创建）
-#   ./import.sh myimage.tar /path/to/code # 加载 tar，删除旧容器/镜像，启动新容器并挂载指定目录
+#   ./import.sh myimage.tar               # 加载 tar（或 tar.gz），删除旧容器/镜像，启动新容器并自动挂载 ~/workspace
+#   ./import.sh myimage.tar.gz /path/to/code # 加载压缩包，删除旧容器/镜像，启动新容器并挂载指定目录
 #   ./import.sh --allow-arch-mismatch ... # 跳过架构一致性检查（允许 QEMU 模拟运行，会明显变慢）
-#   ./import.sh --reset-cache ...         # 清空所有持久化缓存卷后再启动（谨慎使用，见下方说明）
+#   ./import.sh --reset-cache ...         # 清空所有持久化缓存卷后再启动（谨慎使用）
 #   ./import.sh -h|--help                 # 显示帮助
 
 set -euo pipefail
@@ -18,15 +18,7 @@ FULL_IMAGE="${IMAGE_NAME}:${TAG}"
 CONTAINER_NAME="dev-container"
 
 # 持久化缓存卷清单
-# 这里列出的每一项，都会被挂载为一个"具名卷"（named volume），而不是随镜像一起
-# 打包/销毁的普通容器层。具名卷独立于 image tag 存在，重新 build/import 新镜像
-# 时会自动复用旧卷内容，实现"镜像随便重建，缓存持续累积"的效果
-#
-# 原理：具名卷第一次挂载到某路径时，若镜像该路径已有内容，Docker 会自动把镜像
-# 内容复制进卷（首次自动预热）；若卷已有内容（不是第一次），则直接使用卷内容，
-# 不会被镜像覆盖（持续累积，新旧共存）
-#
-# 格式："<卷名后缀>:<容器内绝对路径>"，卷的实际名称为 "${IMAGE_NAME}-cache-<后缀>"
+# 格式："<卷名后缀>:<容器内绝对路径>"
 CACHE_VOLUME_SPECS=(
     "vcpkg:/home/vscode/.cache/vcpkg"
     "uv:/home/vscode/.cache/uv"
@@ -45,8 +37,8 @@ show_help() {
 用法:
   $0                              # 若本地镜像存在，启动容器并自动挂载 ~/workspace（目录不存在则创建）；否则报错
   $0 /path/to/code                # 若本地镜像存在，启动容器并挂载指定目录；否则报错
-  $0 myimage.tar                  # 加载 tar，删除旧容器/镜像，启动新容器并自动挂载 ~/workspace（目录不存在则创建）
-  $0 myimage.tar /path/to/code    # 加载 tar，删除旧容器/镜像，启动新容器并挂载指定目录
+  $0 myimage.tar                  # 加载 tar（或 tar.gz），删除旧容器/镜像，启动新容器并自动挂载 ~/workspace
+  $0 myimage.tar /path/to/code    # 加载 tar（或 tar.gz），删除旧容器/镜像，启动新容器并挂载指定目录
   $0 --allow-arch-mismatch [...]  # 跳过镜像架构与宿主机架构的一致性检查
   $0 --reset-cache [...]          # 启动前清空所有持久化缓存卷（vcpkg/uv/npm/.vscode-server 等）
   $0 -h|--help                    # 显示帮助
@@ -54,7 +46,7 @@ show_help() {
 说明:
   镜像名称固定为 ${FULL_IMAGE}
   容器名称固定为 ${CONTAINER_NAME}
-  如果指定了 tar 包，则强制从 tar 加载，覆盖本地同名镜像。
+  如果指定了 tar 包（支持 .tar 或 .tar.gz），则强制从 tar 加载，覆盖本地同名镜像。
   如果未指定 tar，则使用本地镜像，若不存在则报错。
   默认挂载目录为 ~/workspace（不存在则自动创建），
   此时直接对应容器内 ~/workspace（不嵌套子目录）；
@@ -100,22 +92,21 @@ set -- "${ARGS[@]+"${ARGS[@]}"}"
 TAR_FILE=""
 MOUNT_DIR=""
 
-# 解析剩余的位置参数
+# 解析剩余的位置参数（支持 .tar 或 .tar.gz）
 if [ $# -eq 0 ]; then
-    # 无参数：不加载 tar，不指定目录
     :
 elif [ $# -eq 1 ]; then
-    if [[ "$1" == *.tar ]]; then
+    if [[ "$1" == *.tar ]] || [[ "$1" == *.tar.gz ]]; then
         TAR_FILE="$1"
     else
         MOUNT_DIR="$1"
     fi
 elif [ $# -eq 2 ]; then
-    if [[ "$1" == *.tar ]]; then
+    if [[ "$1" == *.tar ]] || [[ "$1" == *.tar.gz ]]; then
         TAR_FILE="$1"
         MOUNT_DIR="$2"
     else
-        echo "错误: 第一个参数必须是 .tar 文件"
+        echo "错误: 第一个参数必须是 .tar 或 .tar.gz 文件"
         show_help
         exit 1
     fi
@@ -169,7 +160,11 @@ if [ -n "${TAR_FILE}" ]; then
     fi
 
     echo "==> 加载镜像: ${TAR_FILE}"
-    docker load -i "${TAR_FILE}"
+    if [[ "${TAR_FILE}" == *.tar.gz ]]; then
+        gunzip -c "${TAR_FILE}" | docker load
+    else
+        docker load -i "${TAR_FILE}"
+    fi
     echo "==> 镜像加载完成"
 fi
 
@@ -205,8 +200,7 @@ elif [ "${IMAGE_ARCH}" != "${HOST_ARCH}" ] && [ "${ALLOW_ARCH_MISMATCH}" -eq 1 ]
     echo "    已通过 --allow-arch-mismatch 跳过检查，将依赖 QEMU 模拟运行，性能会明显下降" >&2
 fi
 
-# 删除可能遗留的旧容器，这里只删容器和上面的镜像，不涉及缓存卷，缓存卷是独立的持久化资源
-# 不会因为容器/镜像的增删而丢失
+# 删除可能遗留的旧容器
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     echo "==> 停止并删除旧容器: ${CONTAINER_NAME}"
     docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
@@ -214,8 +208,6 @@ if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
 fi
 
 # --reset-cache：显式清空所有持久化缓存卷
-# 这是一个破坏性操作，仅在怀疑缓存损坏、或某个工具版本发生不兼容的重大变更
-# （例如 uv 缓存格式变化）需要彻底重来时手动使用，默认不会触发
 if [ "${RESET_CACHE}" -eq 1 ]; then
     echo "==> --reset-cache 已指定，清空所有持久化缓存卷"
     for spec in "${CACHE_VOLUME_SPECS[@]}"; do
@@ -228,11 +220,12 @@ if [ "${RESET_CACHE}" -eq 1 ]; then
     done
 fi
 
-# 组装 docker run 参数：工作区 bind mount + 全部持久化缓存卷
+# 组装 docker run 参数：工作区 bind mount + 全部持久化缓存卷 + --init
 DOCKER_RUN_ARGS=(
     -d
     --name "${CONTAINER_NAME}"
     --restart unless-stopped
+    --init
     -v "${MOUNT_DIR}:${CONTAINER_TARGET}"
 )
 
@@ -262,10 +255,13 @@ echo "==> 启动容器: ${CONTAINER_NAME}"
 echo "    挂载宿主机目录: ${MOUNT_DIR} -> ${CONTAINER_TARGET}"
 docker run "${DOCKER_RUN_ARGS[@]}" "${FULL_IMAGE}"
 
-# 修复权限：
-# 部分缓存目录在具名卷首次挂载时可能被 Docker 以 root 身份自动创建挂载点
-# 导致以 vscode 身份运行的进程无法写入。这里统一补一次 chown
-# 无论首次挂载具体行为如何都能保证权限正确
+# 等待容器就绪（避免 exec 失败）
+echo "==> 等待容器启动..."
+until docker inspect -f '{{.State.Running}}' "${CONTAINER_NAME}" 2>/dev/null | grep -q true; do
+    sleep 1
+done
+
+# 修复权限
 echo "==> 校正缓存目录权限"
 CACHE_PATHS=()
 for spec in "${CACHE_VOLUME_SPECS[@]}"; do
