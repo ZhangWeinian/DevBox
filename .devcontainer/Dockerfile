@@ -2,9 +2,9 @@
 
 # 所有用于 FROM 行的 ARG 必须声明在第一个 FROM 之前
 ARG JDK_MAJOR_VERSION=21
+ARG GCC_EXTRA_MAJOR_VERSION=16
 ARG NODE_VARIANT=lts
 ARG VARIANT=debian13
-ARG GCC_EXTRA_MAJOR_VERSION=16
 
 # 辅助阶段：Microsoft OpenJDK（distroless，实际路径 /usr/jdk）
 FROM mcr.microsoft.com/openjdk/jdk:${JDK_MAJOR_VERSION}-distroless AS jdk-src
@@ -26,8 +26,8 @@ ARG JDK_MAJOR_VERSION
 # 顺带让 vscode 对 /usr/local/bin 有写权限（uv tool install 的 BIN_DIR 指向此处）
 RUN set -eux \
     && [ "$(dpkg --print-architecture)" = "amd64" ] || { \
-        echo "FATAL: This Dockerfile only supports the construction of AMD64 basic images" >&2; \
-        exit 1; \
+            echo "FATAL: This Dockerfile only supports the construction of AMD64 basic images" >&2; \
+            exit 1; \
         } \
     && chown vscode:vscode /usr/local/bin
 
@@ -116,8 +116,7 @@ RUN set -eux \
 
 # yq：mikefarah Go 版
 RUN set -eux \
-    && curl -fsSL -o /usr/local/bin/yq \
-        "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64" \
+    && curl -fsSL -o /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64" \
     && chmod +x /usr/local/bin/yq \
     && yq --version
 
@@ -188,12 +187,12 @@ RUN set -eux \
     && ln -sf "/usr/bin/aarch64-linux-gnu-gcc-${GCC_EXTRA_MAJOR_VERSION}" /usr/bin/aarch64-linux-gnu-gcc \
     && ln -sf "/usr/bin/aarch64-linux-gnu-g++-${GCC_EXTRA_MAJOR_VERSION}" /usr/bin/aarch64-linux-gnu-g++ \
     && for c in gcc g++ cc c++ cpp aarch64-linux-gnu-gcc aarch64-linux-gnu-g++; do \
-        GOT="$("${c}" -dumpversion | cut -d. -f1)"; \
-        if [ "${GOT}" != "${GCC_EXTRA_MAJOR_VERSION}" ]; then \
-            echo "FATAL: ${c} 当前解析到 GCC ${GOT}，预期 ${GCC_EXTRA_MAJOR_VERSION}" >&2; \
-            exit 1; \
-        fi; \
-        echo "OK: ${c} -> GCC ${GOT}"; \
+            GOT="$("${c}" -dumpversion | cut -d. -f1)"; \
+            if [ "${GOT}" != "${GCC_EXTRA_MAJOR_VERSION}" ]; then \
+                echo "FATAL: ${c} 当前解析到 GCC ${GOT}，预期 ${GCC_EXTRA_MAJOR_VERSION}" >&2; \
+                exit 1; \
+            fi; \
+            echo "OK: ${c} -> GCC ${GOT}"; \
         done
 
 # .NET 10 LTS
@@ -242,6 +241,7 @@ RUN set -eux \
     && [ -x "${PYTHON_BIN}" ] \
     && ln -sf "${PYTHON_BIN}" /usr/local/bin/python3 \
     && ln -sf "${PYTHON_BIN}" /usr/local/bin/python \
+    && python --version \
     && python3 --version
 
 # CMake / Ninja / cmake-format / ruff / autoenv
@@ -266,6 +266,7 @@ RUN set -eux \
         && cmake --version \
         && ruff --version \
     " \
+    && ln -sf /usr/local/bin/cmake /usr/bin/cmake \
     && ln -sf /usr/local/bin/ninja /usr/bin/ninja
 
 # LLVM/Clang 工具链：使用 apt.llvm.org 仓库，安装核心工具并避开 libclang-rt
@@ -284,10 +285,8 @@ RUN set -eux \
     && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/* \
     && for tool in clang clang++ clang-format clang-tidy clangd lldb lld ld.lld llvm-config; do \
-        src="/usr/bin/${tool}-${LLVM_LATEST}"; \
-        if [ -x "${src}" ]; then \
-            ln -sf "${src}" "/usr/local/bin/${tool}"; \
-        fi; \
+            src="/usr/bin/${tool}-${LLVM_LATEST}"; \
+            if [ -x "${src}" ]; then ln -sf "${src}" "/usr/local/bin/${tool}"; fi; \
         done \
     && clang --version \
     && clang++ --version \
@@ -376,7 +375,7 @@ RUN set -eux \
     && ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && if [ -d /usr/local/lib/node_modules/corepack ]; then \
-        ln -sf /usr/local/lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack; \
+            ln -sf /usr/local/lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack; \
         fi \
     && mkdir -p /home/vscode/.npm \
     && chown -R vscode:vscode /home/vscode/.npm \
@@ -480,10 +479,7 @@ RUN --mount=type=cache,target=/home/vscode/.cache/vcpkg/downloads,id=vcpkg-downl
     set -eux \
     && chmod +x /tmp/build-vcpkg-deps.sh \
     && mkdir -p /home/vscode/.cache/vcpkg/downloads /home/vscode/.cache/vcpkg/archives \
-    && chown -R vscode:vscode \
-        /home/vscode/.cache/vcpkg \
-        "${VCPKG_ROOT}" \
-        /home/vscode/.vcpkg-manifest \
+    && chown -R vscode:vscode /home/vscode/.cache/vcpkg "${VCPKG_ROOT}" /home/vscode/.vcpkg-manifest \
     && su vscode -c /tmp/build-vcpkg-deps.sh \
     && rm -f /tmp/build-vcpkg-deps.sh
 
@@ -497,15 +493,13 @@ RUN --mount=type=cache,target=/home/vscode/.cache/vcpkg/downloads,id=vcpkg-downl
 #   运行期（开发时）才启用拦截
 RUN set -eux \
     && mkdir -p /usr/lib/ccache \
-    && for t in gcc g++ cc c++; do \
-        ln -sf /usr/bin/ccache "/usr/lib/ccache/${t}"; \
-        done \
+    && for t in gcc g++ cc c++; do ln -sf /usr/bin/ccache "/usr/lib/ccache/${t}"; done \
     && /usr/lib/ccache/gcc --version | head -n1 \
     && ccache --version | head -n1
 
 ENV PATH="/usr/lib/ccache:${PATH}"
 
-# 收尾：创建工作目录、切换到非 root 用户
+# 创建工作目录、切换到非 root 用户
 RUN set -eux \
     && mkdir -p /home/vscode/workspace \
     && chown vscode:vscode /home/vscode/workspace
