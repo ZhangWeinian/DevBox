@@ -15,8 +15,7 @@ case "${HOST_ARCH}" in
         echo "错误：不支持在当前宿主机架构上构建此镜像" >&2
         echo "  检测到宿主机架构: ${HOST_ARCH}" >&2
         echo "  本 Dockerfile 的交叉编译工具链与 vcpkg triplet 均假设宿主机为 x86_64(amd64)" >&2
-        echo "  请改用 x86_64 机器 / CI runner 构建，" >&2
-        echo "  或参考本脚本 --force-emulate 选项，用 QEMU 模拟 amd64（速度会明显变慢）" >&2
+        echo "  请改用 x86_64 机器 / CI runner 构建" >&2
         exit 1
         ;;
 esac

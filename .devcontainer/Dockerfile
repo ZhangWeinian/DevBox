@@ -35,7 +35,7 @@ RUN set -eux \
 # 编译工具链
 # build-essential/gdb/cppcheck/valgrind：base 镜像不含编译调试套件，
 # 需显式补齐（cpp 变体隐式提供这些，改用 base 后必须自己声明）
-ENV DEBIAN_FRONTEND=noninteractive
+ARG DEBIAN_FRONTEND=noninteractive
 ENV CCACHE_DIR=/home/vscode/.cache/ccache
 ENV CCACHE_SLOPPINESS=file_macro,include_file_mtime,time_macros
 ENV CCACHE_UMASK=002
@@ -461,7 +461,7 @@ RUN set -eux \
 	/home/vscode/.gradle \
 	/home/vscode/.vscode-server
 
-# vcpkg：空架子（默认）或按 manifest 预编译依赖（WITH_VCPKG=1）
+# vcpkg：空架子或按 manifest 预编译依赖（WITH_VCPKG=1）
 #
 # 设计要点：
 #   - 默认 WITH_VCPKG=0：只保留 vcpkg 本体——环境变量、官方仓库、vcpkg
@@ -526,6 +526,10 @@ cat /home/vscode/.vcpkg-manifest/vcpkg.json
 cd /home/vscode/.vcpkg-manifest
 vcpkg install --triplet x64-linux   --x-install-root=/home/vscode/.vcpkg-manifest/vcpkg_installed
 vcpkg install --triplet arm64-linux --x-install-root=/home/vscode/.vcpkg-manifest/vcpkg_installed
+
+# archives 里已经有二进制缓存，buildtrees 和 packages 删掉无损
+rm -rf /home/vscode/.vcpkg-manifest/buildtrees \
+       /home/vscode/.vcpkg-manifest/packages
 EOF
 
 # downloads 使用 BuildKit cache mount（只加速重复构建，不进最终镜像，符合预期）
@@ -563,6 +567,7 @@ RUN set -eux \
 	&& chown vscode:vscode /home/vscode/workspace
 
 USER vscode
+WORKDIR /home/vscode/workspace
 
 # 保持容器前台运行，避免启动后立即退出
 CMD ["sleep", "infinity"]
