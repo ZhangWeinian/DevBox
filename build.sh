@@ -22,20 +22,27 @@ case "${HOST_ARCH}" in
 esac
 
 USE_CACHE=0
+WITH_VCPKG=0
 for arg in "$@"; do
     case "$arg" in
         --use-cache)
             USE_CACHE=1
             ;;
+        --with-vcpkg)
+            WITH_VCPKG=1
+            ;;
         -h|--help)
-            echo "用法: $0 [--use-cache]"
+            echo "用法: $0 [--use-cache] [--with-vcpkg]"
             echo ""
             echo "  默认（不带参数）：完全重新构建（--no-cache --pull）"
-            echo "      系统包、工具链、vcpkg 依赖全部拉取构建这一刻的最新版本"
-            echo "      适用于正式构建 / 定期刷新"
+            echo "      系统包、工具链拉取构建这一刻的最新版本；vcpkg 仅保留空架子"
+            echo "      （clone + bootstrap，不编译任何依赖库），适用于日常开发"
             echo ""
             echo "  --use-cache：吃 Docker 层缓存，仅供调试 Dockerfile 时加速迭代"
             echo "      不保证是最新版本，正式使用前请去掉此参数重新构建一次"
+            echo ""
+            echo "  --with-vcpkg：额外预编译 vcpkg manifest 依赖（x64 + arm64）"
+            echo "      仅当项目确实需要 vcpkg 预编译库时才开启，构建会明显变慢"
             exit 0
             ;;
         *)
@@ -50,7 +57,10 @@ BUILD_ARGS=(--pull)
 if [ "${USE_CACHE}" -eq 0 ]; then
     BUILD_ARGS+=(--no-cache)
 fi
+if [ "${WITH_VCPKG}" -eq 1 ]; then
+    BUILD_ARGS+=(--build-arg WITH_VCPKG=1)
+fi
 
-echo "==> 构建镜像: ${IMAGE_NAME}:${TAG}（use_cache=${USE_CACHE}）"
+echo "==> 构建镜像: ${IMAGE_NAME}:${TAG}（use_cache=${USE_CACHE} with_vcpkg=${WITH_VCPKG}）"
 DOCKER_BUILDKIT=1 docker build "${BUILD_ARGS[@]}" -t "${IMAGE_NAME}:${TAG}" -f "${DOCKERFILE_PATH}" "${CONTEXT}"
 echo "==> 构建完成"

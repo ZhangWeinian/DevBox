@@ -1,84 +1,85 @@
 {
-    "name": "zhangwn2-devenv",
+	"name": "zhangwn2-devenv",
 
-    "build": {
-        "dockerfile": "Dockerfile",
-        "args": {
-            "JDK_MAJOR_VERSION": "21",
-            "NODE_VARIANT": "lts"
-        }
-    },
+	"build": {
+		"dockerfile": "Dockerfile",
+		"args": {
+			"JDK_MAJOR_VERSION": "21",
+			"NODE_VARIANT": "lts",
+			"WITH_VCPKG": "0"
+		}
+	},
 
-    // 容器创建前在【宿主机】上预先建好所有缓存目录并放开权限，避免 Docker 因目标路径不存在而以 root 身份自动创建，导致容器内非 root 的 vscode 用户后续无法写入
-    // 用 bash -c 显式调用，避免宿主机默认 /bin/sh 是 dash 时不支持花括号展开。
-    "initializeCommand": "bash -c 'mkdir -p \"$HOME\"/.devcontainer-caches/{vcpkg/downloads,vcpkg/archives,ccache,uv,pip,npm,pnpm-store,yarn,m2,gradle,vscode-server} && chmod -R a+rwX \"$HOME\"/.devcontainer-caches'",
+	// 容器创建前在【宿主机】上预先建好所有缓存目录并放开权限，避免 Docker 因目标路径不存在而以 root 身份自动创建，导致容器内非 root 的 vscode 用户后续无法写入
+	// 用 bash -c 显式调用，避免宿主机默认 /bin/sh 是 dash 时不支持花括号展开。
+	"initializeCommand": "bash -c 'mkdir -p \"$HOME\"/.devcontainer-caches/{vcpkg/downloads,vcpkg/archives,ccache,uv,pip,npm,pnpm-store,yarn,m2,gradle,vscode-server} && chmod -R a+rwX \"$HOME\"/.devcontainer-caches'",
 
-    // gdb/lldb 调试需要
-    "capAdd": ["SYS_PTRACE"],
-    "securityOpt": ["seccomp=unconfined"],
+	// gdb/lldb 调试需要
+	"capAdd": ["SYS_PTRACE"],
+	"securityOpt": ["seccomp=unconfined"],
 
-    // 全部改为固定路径 bind mount（而非匿名 named volume）
-    // 原因：docker save 不会导出匿名 volume 的内容，而 bind mount 到宿主机固定目录，才能在"冻结导出"时被直接复用为构建上下文
-    // 注意：这些路径是【全局共享】的（不属于任何单一项目仓库），因此可以被所有的项目复用
-    "mounts": [
-        "source=${localEnv:HOME}/.devcontainer-caches/vcpkg/downloads,target=/home/vscode/.cache/vcpkg/downloads,type=bind",
-        "source=${localEnv:HOME}/.devcontainer-caches/vcpkg/archives,target=/home/vscode/.cache/vcpkg/archives,type=bind",
-        "source=${localEnv:HOME}/.devcontainer-caches/ccache,target=/home/vscode/.cache/ccache,type=bind",
-        "source=${localEnv:HOME}/.devcontainer-caches/uv,target=/home/vscode/.cache/uv,type=bind",
-        "source=${localEnv:HOME}/.devcontainer-caches/pip,target=/home/vscode/.cache/pip,type=bind",
-        "source=${localEnv:HOME}/.devcontainer-caches/npm,target=/home/vscode/.npm,type=bind",
-        "source=${localEnv:HOME}/.devcontainer-caches/pnpm-store,target=/home/vscode/.local/share/pnpm/store,type=bind",
-        "source=${localEnv:HOME}/.devcontainer-caches/yarn,target=/home/vscode/.cache/yarn,type=bind",
-        "source=${localEnv:HOME}/.devcontainer-caches/m2,target=/home/vscode/.m2,type=bind",
-        "source=${localEnv:HOME}/.devcontainer-caches/gradle,target=/home/vscode/.gradle,type=bind",
-        "source=${localEnv:HOME}/.devcontainer-caches/vscode-server,target=/home/vscode/.vscode-server,type=bind"
-    ],
+	// 全部改为固定路径 bind mount（而非匿名 named volume）
+	// 原因：docker save 不会导出匿名 volume 的内容，而 bind mount 到宿主机固定目录，才能在"冻结导出"时被直接复用为构建上下文
+	// 注意：这些路径是【全局共享】的（不属于任何单一项目仓库），因此可以被所有的项目复用
+	"mounts": [
+		"source=${localEnv:HOME}/.devcontainer-caches/vcpkg/downloads,target=/home/vscode/.cache/vcpkg/downloads,type=bind",
+		"source=${localEnv:HOME}/.devcontainer-caches/vcpkg/archives,target=/home/vscode/.cache/vcpkg/archives,type=bind",
+		"source=${localEnv:HOME}/.devcontainer-caches/ccache,target=/home/vscode/.cache/ccache,type=bind",
+		"source=${localEnv:HOME}/.devcontainer-caches/uv,target=/home/vscode/.cache/uv,type=bind",
+		"source=${localEnv:HOME}/.devcontainer-caches/pip,target=/home/vscode/.cache/pip,type=bind",
+		"source=${localEnv:HOME}/.devcontainer-caches/npm,target=/home/vscode/.npm,type=bind",
+		"source=${localEnv:HOME}/.devcontainer-caches/pnpm-store,target=/home/vscode/.local/share/pnpm/store,type=bind",
+		"source=${localEnv:HOME}/.devcontainer-caches/yarn,target=/home/vscode/.cache/yarn,type=bind",
+		"source=${localEnv:HOME}/.devcontainer-caches/m2,target=/home/vscode/.m2,type=bind",
+		"source=${localEnv:HOME}/.devcontainer-caches/gradle,target=/home/vscode/.gradle,type=bind",
+		"source=${localEnv:HOME}/.devcontainer-caches/vscode-server,target=/home/vscode/.vscode-server,type=bind"
+	],
 
-    "customizations": {
-        "vscode": {
-            "extensions": [
-                "ms-vscode.cpptools",
-                "ms-vscode.cmake-tools",
-                "ms-vscode.cpptools-extension-pack",
-                "ms-python.python",
-                "ms-vscode.hexeditor",
-                "ms-vscode.cpp-devtools",
-                "xaver.clang-format",
-                "twxs.cmake",
-                "josetr.cmake-language-support-vscode",
-                "cheshirekow.cmake-format",
-                "formulahendry.code-runner",
-                "vadimcn.vscode-lldb",
-                "vizards.deepseek-v4-for-copilot",
-                "tamasfe.even-better-toml",
-                "esbenp.prettier-vscode",
-                "ms-python.vscode-pylance",
-                "ms-python.debugpy",
-                "ms-python.vscode-python-envs",
-                "charliermarsh.ruff",
-                "sonarsource.sonarlint-vscode",
-                "xshrim.txt-syntax",
-                "redhat.vscode-yaml",
-                "dotjoshjohnson.xml"
-            ],
-            "settings": {
-                "C_Cpp.default.cppStandard": "c++23",
-                "C_Cpp.default.cStandard": "c17",
-                "cmake.configureOnOpen": true,
-                "cmake.debugConfig": {
-                    "miDebuggerPath": "/usr/bin/gdb"
-                },
-                "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
-                "terminal.integrated.defaultProfile.linux": "bash",
-                "prettier.configPath": "/home/vscode/.format/.prettierrc.json",
-                "prettier.ignorePath": "/home/vscode/.format/.prettierignore",
-                "ruff.args": ["--config=/home/vscode/.format/ruff.toml"],
-                "cmakeFormat.args": ["-c", "/home/vscode/.format/.cmake-format.yaml.py"], 
-                "sonarlint.pathToNodeExecutable": "/usr/local/bin/node", 
-                "sonarlint.ls.javaHome": "/usr/lib/jvm/msopenjdk-21"
-            }
-        }
-    },
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-vscode.cpptools",
+				"ms-vscode.cmake-tools",
+				"ms-vscode.cpptools-extension-pack",
+				"ms-python.python",
+				"ms-vscode.hexeditor",
+				"ms-vscode.cpp-devtools",
+				"xaver.clang-format",
+				"twxs.cmake",
+				"josetr.cmake-language-support-vscode",
+				"cheshirekow.cmake-format",
+				"formulahendry.code-runner",
+				"vadimcn.vscode-lldb",
+				"vizards.deepseek-v4-for-copilot",
+				"tamasfe.even-better-toml",
+				"esbenp.prettier-vscode",
+				"ms-python.vscode-pylance",
+				"ms-python.debugpy",
+				"ms-python.vscode-python-envs",
+				"charliermarsh.ruff",
+				"sonarsource.sonarlint-vscode",
+				"xshrim.txt-syntax",
+				"redhat.vscode-yaml",
+				"dotjoshjohnson.xml"
+			],
+			"settings": {
+				"C_Cpp.default.cppStandard": "c++23",
+				"C_Cpp.default.cStandard": "c17",
+				"cmake.configureOnOpen": true,
+				"cmake.debugConfig": {
+					"miDebuggerPath": "/usr/bin/gdb"
+				},
+				"python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+				"terminal.integrated.defaultProfile.linux": "bash",
+				"prettier.configPath": "/home/vscode/.format/.prettierrc.json",
+				"prettier.ignorePath": "/home/vscode/.format/.prettierignore",
+				"ruff.args": ["--config=/home/vscode/.format/ruff.toml"],
+				"cmakeFormat.args": ["-c", "/home/vscode/.format/.cmake-format.yaml.py"],
+				"sonarlint.pathToNodeExecutable": "/usr/local/bin/node",
+				"sonarlint.ls.javaHome": "/usr/lib/jvm/msopenjdk-21"
+			}
+		}
+	},
 
-    "remoteUser": "vscode"
+	"remoteUser": "vscode"
 }
