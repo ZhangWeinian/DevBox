@@ -569,7 +569,7 @@ RUN set -eux \
 	&& chown vscode:vscode /home/vscode/workspace
 
 USER vscode
-WORKDIR /home/vscode/workspace
+WORKDIR /home/vscode
 
 # 保持容器前台运行，避免启动后立即退出
 CMD ["sleep", "infinity"]
