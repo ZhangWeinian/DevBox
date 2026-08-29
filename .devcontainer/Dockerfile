@@ -485,10 +485,12 @@ ENV PATH="${PATH}:${VCPKG_ROOT}"
 
 # 显式 clone vcpkg（浅克隆即可，build-vcpkg-deps.sh 会自动 unshallow 补全历史）
 RUN set -eux \
-	&& git clone --depth 1 https://github.com/microsoft/vcpkg.git "${VCPKG_ROOT}" \
-	&& chown -R vscode:vscode "${VCPKG_ROOT}" \
-	&& su vscode -c "bash ${VCPKG_ROOT}/bootstrap-vcpkg.sh -disableMetrics" \
-	&& "${VCPKG_ROOT}/vcpkg" version
+    && mkdir -p /home/vscode/.cache/vcpkg/downloads \
+    && chown vscode:vscode /home/vscode/.cache/vcpkg/downloads \
+    && git clone --depth 1 https://github.com/microsoft/vcpkg.git "${VCPKG_ROOT}" \
+    && chown -R vscode:vscode "${VCPKG_ROOT}" \
+    && su vscode -c "bash ${VCPKG_ROOT}/bootstrap-vcpkg.sh -disableMetrics" \
+    && "${VCPKG_ROOT}/vcpkg" version
 
 COPY vcpkg.json.in /home/vscode/.vcpkg-manifest/vcpkg.json.in
 
