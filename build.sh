@@ -60,6 +60,6 @@ if [ "${WITH_VCPKG}" -eq 1 ]; then
     BUILD_ARGS+=(--build-arg WITH_VCPKG=1)
 fi
 
-echo "==> 构建镜像: ${IMAGE_NAME}:${TAG}（use_cache=${USE_CACHE} with_vcpkg=${WITH_VCPKG}）"
+echo "==> 构建镜像: ${IMAGE_NAME}:${TAG}（use-cache=${USE_CACHE} with-vcpkg=${WITH_VCPKG}）"
 DOCKER_BUILDKIT=1 docker build "${BUILD_ARGS[@]}" -t "${IMAGE_NAME}:${TAG}" -f "${DOCKERFILE_PATH}" "${CONTEXT}"
 echo "==> 构建完成"
