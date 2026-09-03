@@ -159,6 +159,7 @@ RUN set -eux \
 	    fzf \
 	    bat \
 	    eza \
+	    manpages-zh \
 	&& apt-get autoremove -y \
 	&& apt-get clean -y \
 	&& ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
