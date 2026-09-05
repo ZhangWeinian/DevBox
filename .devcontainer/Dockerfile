@@ -31,16 +31,75 @@ RUN set -eux \
 	    } \
 	&& chown vscode:vscode /usr/local/bin
 
+# 中文环境：locale / 字体 / 时区 / 中文 man
+# 独立前置段：位于所有内容性安装之前，后续每一个构建步骤（GCC 探测、
+# vcpkg、aqt、冒烟测试）都在 zh_CN.UTF-8 环境下执行，相当于整条构建链路
+# 做过 locale 兼容性验证，问题在构建期暴露而非开发期
+#
+# 输出策略：成功时零确认回执——工具原生进度（apt/locale-gen）保留作为
+# 操作证据；仅预期内异常向 stderr 写一行 NOTE，不阻断构建
+#
+# 设计要点：
+#   - dpkg --add-architecture arm64 从"基础系统包"段前移至此：
+#     本段 fonts-noto-cjk:arm64 的尝试安装需要 multiarch 已开启
+#   - locales + locale-gen 是关键步骤：仅设 ENV 而无 locale 数据时，
+#     zh_CN.UTF-8 是无效名字，glibc 静默回退 C 并刷警告
+#   - fonts-noto-cjk 为 Multi-Arch: foreign（架构无关字体数据），
+#     amd64 单实例即同时服务本机与 arm64 交叉程序；:arm64 副本在
+#     co-install 场景通常被 dpkg 拒绝——if 取反：仅失败时 NOTE，成功静默
+#   - man-db + manpages-zh：中文 man 页的查看器与内容，二者配套
+#   - 时区三重一致：ENV TZ + /etc/localtime + /etc/timezone
+#   - fc-cache 预生成缓存：Qt 字体发现走 fontconfig，免去首次 GUI 启动的全盘扫描
+#   - 故意不设 LC_ALL：保留 "LC_ALL=C <cmd>" 的单命令逃生口
+ARG DEBIAN_FRONTEND=noninteractive
+RUN set -eux \
+    && dpkg --add-architecture arm64 \
+    && apt-get update \
+    && apt-get -yq install --no-install-recommends \
+        locales \
+        tzdata \
+        fontconfig \
+        fonts-noto-cjk \
+        man-db \
+        manpages-zh \
+    && if ! apt-get -yq install --no-install-recommends fonts-noto-cjk:arm64 >/dev/null 2>&1; then \
+            echo "NOTE: fonts-noto-cjk:arm64 与已装 amd64 实例不可共存；字体数据架构无关，单一实例已覆盖 arm64 侧" >&2; \
+        fi \
+    && rm -rf /var/lib/apt/lists/* \
+    && grep -q '^zh_CN.UTF-8' /etc/locale.gen || echo 'zh_CN.UTF-8 UTF-8' >> /etc/locale.gen \
+    && locale-gen \
+    && update-locale LANG=zh_CN.UTF-8 LANGUAGE=zh_CN:zh \
+    && locale -a | grep -qi 'zh_CN.utf8' \
+    && ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo 'Asia/Shanghai' > /etc/timezone \
+    && fc-cache -f >/dev/null 2>&1 \
+    && fc-list :lang=zh family | grep -qi 'noto sans cjk'
+
+# 全局默认 locale 与时区：ENV 写入镜像元数据，容器内所有进程默认继承
+ENV LANG=zh_CN.UTF-8 \
+    LANGUAGE=zh_CN:zh \
+    TZ=Asia/Shanghai
+
+# 中文环境冒烟验证：断言全部静默（-q / 重定向），失败即构建失败；
+# 可选内容（中文 man 页）缺失仅 NOTE，不作为硬性失败
+RUN set -eux \
+    && locale | grep -q '^LANG=zh_CN' \
+    && locale -a | grep -qi 'zh_CN.utf8' \
+    && echo '中文字符流处理验证：简体 UTF-8' | grep -q '简体' \
+    && test "$(date +%z)" = "+0800" \
+    && readlink /etc/localtime | grep -q 'Asia/Shanghai' \
+    && if command -v man >/dev/null 2>&1; then \
+            man -w -L zh_CN.UTF-8 ls 2>/dev/null | grep -q '/zh_CN/'  || echo "NOTE: ls 中文 man 页缺失，man 将回退英文页" >&2; \
+        fi
+
 # 基础系统包
 # 编译工具链
 # build-essential/gdb/cppcheck/valgrind：base 镜像不含编译调试套件，
 # 需显式补齐（cpp 变体隐式提供这些，改用 base 后必须自己声明）
-ARG DEBIAN_FRONTEND=noninteractive
 ENV CCACHE_DIR=/home/vscode/.cache/ccache
 ENV CCACHE_SLOPPINESS=file_macro,include_file_mtime,time_macros
 ENV CCACHE_UMASK=002
 RUN set -eux \
-	&& dpkg --add-architecture arm64 \
 	&& apt-get update \
 	&& apt-get -yq upgrade \
 	&& apt-get -yq install --no-install-recommends \
@@ -55,11 +114,7 @@ RUN set -eux \
 	    libegl1 \
 	    libgl1-mesa-dri \
 	    libfontconfig1 \
-	    locales \
-        fontconfig \
-        fonts-noto-cjk \
         fonts-noto-cjk:arm64 \
-        tzdata \
 	    libharfbuzz0b \
 	    libxkbcommon0 \
 	    libxkbcommon-x11-0 \
@@ -159,7 +214,6 @@ RUN set -eux \
 	    fzf \
 	    bat \
 	    eza \
-	    manpages-zh \
 	&& apt-get autoremove -y \
 	&& apt-get clean -y \
 	&& ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
