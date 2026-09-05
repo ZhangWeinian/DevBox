@@ -62,9 +62,7 @@ RUN set -eux \
         fonts-noto-cjk \
         man-db \
         manpages-zh \
-    && if ! apt-get -yq install --no-install-recommends fonts-noto-cjk:arm64 >/dev/null 2>&1; then \
-            echo "NOTE: fonts-noto-cjk:arm64 与已装 amd64 实例不可共存；字体数据架构无关，单一实例已覆盖 arm64 侧" >&2; \
-        fi \
+        fonts-noto-cjk:arm64 \
     && rm -rf /var/lib/apt/lists/* \
     && grep -q '^zh_CN.UTF-8' /etc/locale.gen || echo 'zh_CN.UTF-8 UTF-8' >> /etc/locale.gen \
     && locale-gen \
