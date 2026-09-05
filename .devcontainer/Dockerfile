@@ -44,11 +44,8 @@ RUN set -eux \
 #     本段 fonts-noto-cjk:arm64 的尝试安装需要 multiarch 已开启
 #   - locales + locale-gen 是关键步骤：仅设 ENV 而无 locale 数据时，
 #     zh_CN.UTF-8 是无效名字，glibc 静默回退 C 并刷警告
-#   - fonts-noto-cjk 为 Multi-Arch: foreign（架构无关字体数据），
-#     amd64 单实例即同时服务本机与 arm64 交叉程序；:arm64 副本在
-#     co-install 场景通常被 dpkg 拒绝——if 取反：仅失败时 NOTE，成功静默
 #   - man-db + manpages-zh：中文 man 页的查看器与内容，二者配套
-#   - 时区三重一致：ENV TZ + /etc/localtime + /etc/timezone
+#   - 时区设置一致性：ENV TZ + /etc/localtime + /etc/timezone
 #   - fc-cache 预生成缓存：Qt 字体发现走 fontconfig，免去首次 GUI 启动的全盘扫描
 #   - 故意不设 LC_ALL：保留 "LC_ALL=C <cmd>" 的单命令逃生口
 ARG DEBIAN_FRONTEND=noninteractive
