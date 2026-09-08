@@ -209,6 +209,9 @@ RUN set -eux \
 	    fzf \
 	    bat \
 	    eza \
+	    libopenmpi-dev \
+	    openmpi-bin \
+	    python3-dev \
 	&& apt-get autoremove -y \
 	&& apt-get clean -y \
 	&& ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
