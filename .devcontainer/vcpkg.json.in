@@ -33,6 +33,8 @@
     "slick-net",
     "drogon",
     "neko-network",
-    "oatpp-curl"
+    "oatpp-curl", 
+    "websocketclient-cpp", 
+    "geographiclib"
   ]
 }
