@@ -30,6 +30,7 @@ CACHE_VOLUME_SPECS=(
     "m2:/home/vscode/.m2"
     "gradle:/home/vscode/.gradle"
     "vscode-server:/home/vscode/.vscode-server"
+    "vcpkg-manifest:/home/vscode/.vcpkg-manifest"
 )
 
 show_help() {
@@ -250,6 +251,21 @@ docker run --rm --user root \
         fi
         chown -R 1000:1000 /mnt/vcpkg-cache-volume
     '
+
+echo "==> 同步镜像内置的 vcpkg manifest（baseline 信息）"
+docker run --rm --user root \
+    -v "${IMAGE_NAME}-cache-vcpkg-manifest:/mnt/vcpkg-manifest-volume" \
+    "${FULL_IMAGE}" \
+    bash -c '
+        set -eux
+        mkdir -p /mnt/vcpkg-manifest-volume
+        if [ -d /home/vscode/.vcpkg-manifest ] && [ -n "$(ls -A /home/vscode/.vcpkg-manifest 2>/dev/null)" ]; then
+            rm -rf /mnt/vcpkg-manifest-volume/*
+            cp -a /home/vscode/.vcpkg-manifest/. /mnt/vcpkg-manifest-volume/
+            chown -R 1000:1000 /mnt/vcpkg-manifest-volume
+        fi
+    '
+echo "==> vcpkg manifest 同步完成"
 
 echo "==> 启动容器: ${CONTAINER_NAME}"
 echo "    挂载宿主机目录: ${MOUNT_DIR} -> ${CONTAINER_TARGET}"
