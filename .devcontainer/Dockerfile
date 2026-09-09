@@ -586,7 +586,17 @@ set -eux
 #    基础镜像自带（或上面显式 clone）的 vcpkg 通常是浅克隆（--depth 1），
 #    只有普通 fetch 不会补全历史；manifest 模式解析历史版本 port 时需要完整
 #    git 历史（通过 git read-tree 访问历史 tree object），必须显式 unshallow
-DEFAULT_BRANCH=$(git -C "${VCPKG_ROOT}" remote show origin | awk '/HEAD branch/ {print $NF}')
+DEFAULT_BRANCH=""
+for i in 1 2 3; do
+    DEFAULT_BRANCH=$(git -C "${VCPKG_ROOT}" remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}')
+    if [ -n "${DEFAULT_BRANCH}" ]; then
+        break
+    fi
+    sleep 3
+done
+if [ -z "${DEFAULT_BRANCH}" ]; then
+    DEFAULT_BRANCH="master"
+fi
 
 if git -C "${VCPKG_ROOT}" rev-parse --is-shallow-repository | grep -q true; then
     git -C "${VCPKG_ROOT}" fetch --quiet --unshallow origin "${DEFAULT_BRANCH}"
