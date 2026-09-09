@@ -34,7 +34,6 @@
     "drogon",
     "neko-network",
     "oatpp-curl", 
-    "websocketclient-cpp", 
     "geographiclib", 
     "plog", 
     "ffmpeg", 
