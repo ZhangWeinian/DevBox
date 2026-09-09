@@ -213,6 +213,7 @@ RUN set -eux \
 	    openmpi-bin \
 	    python3-dev \
 	    linux-libc-dev \
+	    nasm \
 	&& apt-get autoremove -y \
 	&& apt-get clean -y \
 	&& ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
