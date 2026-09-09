@@ -35,6 +35,10 @@
     "neko-network",
     "oatpp-curl", 
     "websocketclient-cpp", 
-    "geographiclib"
+    "geographiclib", 
+    "plog", 
+    "ffmpeg", 
+    "zstd", 
+    "rxcpp"
   ]
 }
