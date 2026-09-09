@@ -259,7 +259,7 @@ docker run --rm --user root \
     bash -c '
         set -eux
         mkdir -p /mnt/vcpkg-manifest-volume
-        if [ -d /home/vscode/.vcpkg-manifest ] && [ -n "$(ls -A /home/vscode/.vcpkg-manifest 2>/dev/null)" ]; then
+        if [ -f /home/vscode/.vcpkg-manifest/vcpkg.json ]; then
             rm -rf /mnt/vcpkg-manifest-volume/*
             cp -a /home/vscode/.vcpkg-manifest/. /mnt/vcpkg-manifest-volume/
             chown -R 1000:1000 /mnt/vcpkg-manifest-volume
