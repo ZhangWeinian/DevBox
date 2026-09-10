@@ -557,11 +557,22 @@ ENV VCPKG_FORCE_SYSTEM_BINARIES=1
 ENV VCPKG_DEFAULT_TRIPLET=x64-linux
 ENV PATH="${PATH}:${VCPKG_ROOT}"
 
-# 显式 clone vcpkg（浅克隆即可，build-vcpkg-deps.sh 会自动 unshallow 补全历史）
+# 显式 clone vcpkg，并无条件补齐 master 全量历史
+#   为什么必须 unshallow（即使 WITH_VCPKG=0 空架子构建）：
+#     manifest 模式解析 builtin-baseline 需要目标 commit 在本地 git 对象库中
+#     （vcpkg 通过 `git show <sha>:versions/baseline.json` 读取）。
+#     浅克隆只有 HEAD 一个 commit；当项目 baseline 早于构建日时，
+#     运行时解析会失败并提示联网 `git fetch` —— 弱网/离线环境不可用，
+#     具名卷里的二进制缓存也就无法被使用。
+#     补齐后，任意历史 baseline 均可离线解析。
+#   说明：build-vcpkg-deps.sh（仅 WITH_VCPKG=1）里也有同样的 unshallow 动作，
+#     此处执行后那里会自然跳过（幂等）；本步骤失败即构建失败——宁可构建时暴露，
+#     也不要在运行时踩"缓存用不了"的坑。
 RUN set -eux \
     && mkdir -p /home/vscode/.cache/vcpkg/downloads \
     && chown vscode:vscode /home/vscode/.cache/vcpkg/downloads \
     && git clone --depth 1 https://github.com/microsoft/vcpkg.git "${VCPKG_ROOT}" \
+    && git -C "${VCPKG_ROOT}" fetch --quiet --unshallow origin master \
     && chown -R vscode:vscode "${VCPKG_ROOT}" \
     && su vscode -c "bash ${VCPKG_ROOT}/bootstrap-vcpkg.sh -disableMetrics" \
     && "${VCPKG_ROOT}/vcpkg" version
