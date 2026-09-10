@@ -22,8 +22,6 @@ ARG GCC_EXTRA_MAJOR_VERSION
 ARG JDK_MAJOR_VERSION
 
 # 架构防御：交叉编译工具链 / vcpkg triplet 均按 amd64 宿主机硬编码，
-# 基础镜像解析为非 amd64（如 arm64 宿主机未加 --platform）时立即失败；
-# 顺带让 vscode 对 /usr/local/bin 有写权限（uv tool install 的 BIN_DIR 指向此处）
 RUN set -eux \
     && [ "$(dpkg --print-architecture)" = "amd64" ] || { \
             echo "FATAL: This Dockerfile only supports the construction of AMD64 basic images" >&2; \
@@ -59,7 +57,7 @@ ENV LANG=zh_CN.UTF-8 \
     LANGUAGE=zh_CN:zh \
     TZ=Asia/Shanghai
 
-# 中文环境冒烟验证：断言全部静默（-q / 重定向），失败即构建失败
+# 中文环境验证：断言全部静默（-q / 重定向），失败即构建失败
 RUN set -eux \
     && locale | grep -q '^LANG=zh_CN' \
     && locale -a | grep -qi 'zh_CN.utf8' \
@@ -201,7 +199,8 @@ RUN set -eux \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p "${CCACHE_DIR}" \
     && chown -R vscode:vscode "${CCACHE_DIR}" \
-    && grep -q '^zh_CN.UTF-8' /etc/locale.gen || echo 'zh_CN.UTF-8 UTF-8' >> /etc/locale.gen \
+    && grep -q '^zh_CN.UTF-8' /etc/locale.gen \
+        || echo 'zh_CN.UTF-8 UTF-8' >> /etc/locale.gen \
     && locale-gen \
     && update-locale LANG=zh_CN.UTF-8 LANGUAGE=zh_CN:zh \
     && locale -a | grep -q 'zh_CN.utf8' \
@@ -226,9 +225,9 @@ RUN set -eux \
 
 # yq：mikefarah Go 版
 RUN set -eux \
-        && curl -fsSL -o /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64" \
-        && chmod +x /usr/local/bin/yq \
-        && yq --version
+    && curl -fsSL -o /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64" \
+    && chmod +x /usr/local/bin/yq \
+    && yq --version
 
 # GCC 16：新增第二套 GCC 工具链（含 arm64 交叉），注册为系统默认
 #
@@ -338,13 +337,14 @@ RUN set -eux \
         "${PIP_CACHE_DIR}"
 
 # Python：通过 uv 安装最新受管理版本，并建立全局软链，
+# 全程只有一套 Python，工具链和临时脚本都能找到，不产生版本歧义
 RUN set -eux \
     && su vscode -c "\
         set -eux \
         && uv python install --python-preference only-managed \
     "
 # uv 托管的 Python（python-build-standalone）bin/ 下必有 python3；
-#   python 一并软链跟随；pip 不做全局软链——本环境包管理统一走 uv（uv pip / uv tool）
+# python 一并软链跟随；pip 不做全局软链——本环境包管理统一走 uv（uv pip / uv tool）
 RUN set -eux \
     && PYTHON_BIN="$(uv python find --python-preference only-managed)" \
     && [ -x "${PYTHON_BIN}" ] \
@@ -354,8 +354,7 @@ RUN set -eux \
     && python3 --version
 
 # CMake / Ninja / cmake-format / ruff / autoenv
-#   通过 uv tool install 安装到隔离虚拟环境，bin 软链到 /usr/local/bin
-#   cmake 在此处安装，不从 apt 装，保证始终是构建时最新版本
+# 通过 uv tool install 安装到隔离虚拟环境，bin 软链到 /usr/local/bin
 RUN set -eux \
     && su vscode -c "\
         set -eux \
@@ -406,15 +405,7 @@ RUN set -eux \
     && llvm-config --version \
     && command -v ld.lld
 
-# 快速测试：以 vscode 用户验证三套工具链的本地与交叉编译能力（对应需求）：
-#   1) 系统默认 GCC 系列（gcc-${DEF_VER}）：本地编译 + 运行 + file 检查，
-#      arm64 交叉编译 + file 检查
-#   2) 新增 GCC 16 系列（gcc-${NEW_VER}）：同上；并验证 gcc/g++/cc/c++/cpp
-#      无版本号入口经 alternatives 解析后确实指向 16，以及 aarch64-linux-gnu-gcc
-#      无版本号入口可交叉编译
-#   3) LLVM Clang：本地编译 + 运行 + file 检查；arm64 交叉编译
-#      （--target=aarch64-linux-gnu，经 --gcc-toolchain 复用 GCC 的 arm64 sysroot）
-# 版本号从 GCC 配置阶段落盘的文件读取，不硬编码
+# 快速测试
 RUN set -eux \
     && su vscode -c '\
         set -eux \
@@ -521,26 +512,28 @@ RUN set -eux \
         /home/vscode/.gradle \
         /home/vscode/.vscode-server
 
-# ccache：官方推荐的"驱动软链"接入方式（Debian 惯例路径 /usr/lib/ccache）
-#   ccache 以 gcc/g++/cc/c++ 之名软链到 /usr/lib/ccache 并前置进 PATH，
-#   所有经 PATH 解析的编译调用透明经过缓存，无需改动任何构建脚本
-#   已知取舍：command -v gcc 将显示 /usr/lib/ccache/gcc（ccache 驱动），属标准代价；
-#   版本化调用（gcc-16 等）不经缓存，需要时照样式补软链
-#   本段必须位于 vcpkg 预编译（WITH_VCPKG=1）之前：
-#     vcpkg 二进制缓存 ABI 包含"编译器解析结果"（有无 /usr/lib/ccache 驱动），
-#     预热与运行期必须使用同一编译器，否则预热产物在运行期会全部 miss
-#     预热期的 ccache 数据经 BuildKit cache mount 隔离，不会写进镜像层
-#   运行期兜底：/etc/profile.d/00-ccache-path.sh 保证登录 shell 的 PATH 含 ccache
-#     （即使登录链路以 /etc/environment 覆盖 PATH，也与运行期保持一致解析）
-RUN set -eux \
-    && mkdir -p /usr/lib/ccache \
-    && for t in gcc g++ cc c++; do ln -sf /usr/bin/ccache "/usr/lib/ccache/${t}"; done \
-    && /usr/lib/ccache/gcc --version | head -n1 \
-    && ccache --version | head -n1 \
-    && printf '%s\n' 'case ":${PATH}:" in *":/usr/lib/ccache:"*) ;; *) PATH="/usr/lib/ccache:${PATH}"; export PATH ;; esac' > /etc/profile.d/00-ccache-path.sh \
-    && chmod 644 /etc/profile.d/00-ccache-path.sh
+# ccache：刻意不在 PATH/链接层 启用"透明拦截"
+#   本镜像统一约定：任何路径都解析到 /usr/bin/*
+#     - 预热期：build-vcpkg-deps.sh 显式钉 CC/CXX 并断言；
+#     - 运行期：清空 /usr/lib/ccache 驱动链接（dpkg 装 gcc 类包时可能自动重建，
+#       故构建末尾显式清空），并由 /etc/profile.d/00-no-ccache-path.sh
+#       兜底剔除 PATH 中的该目录。
+RUN rm -rf /usr/lib/ccache
 
-ENV PATH="/usr/lib/ccache:${PATH}"
+COPY <<'EOF' /etc/profile.d/00-no-ccache-path.sh
+case ":${PATH}:" in
+    *"/usr/lib/ccache"*)
+    PATH="$(printf "%s" "${PATH}" | tr ":" "\n" | grep -vx "/usr/lib/ccache" | paste -sd: -)"
+    export PATH
+    ;;
+esac
+EOF
+
+RUN chmod 644 /etc/profile.d/00-no-ccache-path.sh
+
+# ccache 以"启动器"方式接入（CMAKE_<LANG>_COMPILER_LAUNCHER，不改编译器身份、不进 ABI）
+ENV CMAKE_C_COMPILER_LAUNCHER=/usr/bin/ccache
+ENV CMAKE_CXX_COMPILER_LAUNCHER=/usr/bin/ccache
 
 # vcpkg：空架子或按 manifest 预编译依赖（WITH_VCPKG=1）
 #
@@ -579,21 +572,21 @@ COPY <<'EOF' /tmp/build-vcpkg-deps.sh
 #!/usr/bin/env bash
 set -eux
 
-# 与运行期保持编译器解析一致：vcpkg 二进制缓存 ABI 包含"编译器身份"，
-#   su/PAM/登录链路可能改写或覆盖 PATH，这里显式前置并断言 ccache 驱动生效
+# 与运行期保持编译器解析一致（vcpkg ABI 含"编译器身份"，这是硬约定）：
+#   本镜像统一 /usr/bin/*；此处显式钉 CC/CXX 并断言，防 su/PAM/登录链路漂移。
+#   断言失败说明镜像环境被人为改回了 ccache 包装，必须修环境而不是绕过
 export VCPKG_ROOT="${VCPKG_ROOT:-/usr/local/vcpkg}"
-case ":${PATH}:" in
-    *":/usr/lib/ccache:"*) ;;
-    *) export PATH="/usr/lib/ccache:${PATH}" ;;
-esac
+export CC=/usr/bin/gcc
+export CXX=/usr/bin/c++
 case ":${PATH}:" in
     *":${VCPKG_ROOT}:"*) ;;
     *) export PATH="${PATH}:${VCPKG_ROOT}" ;;
 esac
 case "$(command -v c++)" in
-    /usr/lib/ccache/*) echo "vcpkg 预热编译器（与运行期一致）: $(command -v c++)" ;;
+    /usr/bin/c++)
+    ;;
     *)
-    echo "FATAL: c++ 未解析到 /usr/lib/ccache/（实际: $(command -v c++)）" >&2
+    echo "FATAL: c++ 未解析到 /usr/bin/（实际: $(command -v c++)）；请检查 /usr/lib/ccache 是否被重新启用" >&2
     exit 1
     ;;
 esac
@@ -626,15 +619,15 @@ bash "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
 vcpkg --version
 
 # 用当前 HEAD commit sha 作为 builtin-baseline，动态生成 vcpkg.json
-#  不写死版本号，每次构建都对应当时 vcpkg registry 的最新状态
+#    不写死版本号，每次构建都对应当时 vcpkg registry 的最新状态
 BASELINE=$(git -C "${VCPKG_ROOT}" rev-parse HEAD)
 jq --arg baseline "${BASELINE}" '.["builtin-baseline"] = $baseline' \
     /home/vscode/.vcpkg-manifest/vcpkg.json.in > /home/vscode/.vcpkg-manifest/vcpkg.json
 cat /home/vscode/.vcpkg-manifest/vcpkg.json
 
 # 按 manifest 安装依赖（两个 triplet 各跑一次）
-#   x64-linux：在 amd64 宿主机上原生编译
-#   arm64-linux：在 amd64 宿主机上交叉编译，产物供 arm64 目标设备使用
+#    x64-linux：在 amd64 宿主机上原生编译
+#    arm64-linux：在 amd64 宿主机上交叉编译，产物供 arm64 目标设备使用
 cd /home/vscode/.vcpkg-manifest
 vcpkg install --triplet x64-linux   --x-install-root=/home/vscode/.vcpkg-manifest/vcpkg_installed
 vcpkg install --triplet arm64-linux --x-install-root=/home/vscode/.vcpkg-manifest/vcpkg_installed
@@ -644,9 +637,10 @@ rm -rf /home/vscode/.vcpkg-manifest/buildtrees \
        /home/vscode/.vcpkg-manifest/packages
 EOF
 
-# downloads 使用 BuildKit cache mount（只加速重复构建，不进最终镜像，符合预期）
+# downloads / ccache 使用 BuildKit cache mount（只加速重复构建，不进最终镜像，符合预期）：
+#   ccache：依赖编译也经 CMAKE_<LANG>_COMPILER_LAUNCHER 环境变量注入的启动器，
+#   缓存放 BuildKit 缓存可跨构建复用，同时避免把大量编译缓存写进镜像层
 # archives 不使用 cache mount（编译产物必须进镜像层，供 import.sh 同步至持久化卷）
-# ccache 使用 cache mount：预热期缓存数据不进镜像层（运行期该路径由宿主卷提供），且可跨构建复用
 # 只有 WITH_VCPKG=1（build.sh --with-vcpkg）才真正执行 manifest 依赖编译
 RUN --mount=type=cache,target=/home/vscode/.cache/vcpkg/downloads,id=vcpkg-downloads-cache,uid=1000,gid=1000 \
     --mount=type=cache,target=/home/vscode/.cache/ccache,id=ccache-build,uid=1000,gid=1000 \
