@@ -190,7 +190,6 @@ RUN set -eux \
         libopenmpi-dev \
         openmpi-bin \
         python3-dev \
-        linux-libc-dev \
         nasm \
         qemu-user-static \
         linux-libc-dev \
@@ -590,8 +589,8 @@ set -eux
 #   本镜像统一 /usr/bin/*；此处显式钉 CC/CXX 并断言，防 su/PAM/登录链路漂移。
 #   断言失败说明镜像环境被人为改回了 ccache 包装，必须修环境而不是绕过
 export VCPKG_ROOT="${VCPKG_ROOT:-/usr/local/vcpkg}"
-export CC=/usr/bin/gcc
-export CXX=/usr/bin/c++
+# export CC=/usr/bin/gcc
+# export CXX=/usr/bin/c++
 case ":${PATH}:" in
     *":${VCPKG_ROOT}:"*) ;;
     *) export PATH="${PATH}:${VCPKG_ROOT}" ;;
