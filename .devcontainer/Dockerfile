@@ -193,6 +193,7 @@ RUN set -eux \
         linux-libc-dev \
         nasm \
         qemu-user-static \
+        linux-libc-dev \
     && apt-get autoremove -y \
     && apt-get clean -y \
     && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
