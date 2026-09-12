@@ -13,19 +13,7 @@ FROM mcr.microsoft.com/openjdk/jdk:${JDK_MAJOR_VERSION}-distroless AS jdk-src
 # 务必用 Debian 系变体（默认即是），不要用 -alpine：musl 与基础镜像 glibc 不兼容
 FROM node:${NODE_VARIANT} AS node-src
 
-# 辅助阶段：LLVM/Clang 工具链
-#
-# 为什么独立阶段：
-#   apt.llvm.org 的 libclang-rt-<ver>-dev 依赖 libc6-i386
-#   而 libc6-i386 又要求 libc6 精确到某个版本号，与主镜像
-#   devcontainers/base:debian13 自带的 libc6（更新）冲突
-#   解决方案：在 debian:12（libc6 与 libc6-i386 天然配套）中装好
-#   再把 /usr/lib/llvm-<ver> 整目录 COPY 到主阶段
-#   完全不触碰主镜像的 libc6，也不影响主镜像任何其他工具链
-#
-#   LLVM 二进制对 glibc 向后兼容（旧编译 → 新运行 OK）
-#   clang 查找 builtin 头文件时按可执行文件相对路径探测
-#   因此必须保持 /usr/lib/llvm-<ver> 路径在两个阶段完全一致
+# 辅助阶段：LLVM/Clang 工具链（独立阶段，避免污染主镜像）
 FROM debian:13 AS llvm-builder
 ARG DEBIAN_FRONTEND=noninteractive
 RUN set -eux \
@@ -39,7 +27,10 @@ RUN set -eux \
     && rm -rf /var/lib/apt/lists/* \
     && LLVM_LATEST=$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest \
         | grep -Po '"tag_name":\s*"llvmorg-\K[0-9]+') \
-    && echo "${LLVM_LATEST}" > /tmp/llvm-version \
+    && if [ -z "${LLVM_LATEST}" ]; then \
+           echo "FATAL: 无法从 GitHub API 获取 LLVM 最新版本号" >&2; \
+           exit 1; \
+       fi \
     && curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh \
     && chmod +x /tmp/llvm.sh \
     && /tmp/llvm.sh "${LLVM_LATEST}" \
@@ -55,7 +46,16 @@ RUN set -eux \
     && rm -f /tmp/llvm.sh \
     && rm -rf /var/lib/apt/lists/* \
     && test -x "/usr/lib/llvm-${LLVM_LATEST}/bin/clang" \
-    && /usr/lib/llvm-${LLVM_LATEST}/bin/clang --version
+    && test -x "/usr/lib/llvm-${LLVM_LATEST}/bin/llvm-config" \
+    && INSTALLED_VER="$(/usr/lib/llvm-${LLVM_LATEST}/bin/llvm-config --version | cut -d. -f1)" \
+    && if [ "${INSTALLED_VER}" != "${LLVM_LATEST}" ]; then \
+           echo "FATAL: 期望 LLVM ${LLVM_LATEST}，实际装到 LLVM ${INSTALLED_VER}" >&2; \
+           exit 1; \
+       fi \
+    && /usr/lib/llvm-${LLVM_LATEST}/bin/clang --version \
+    && mkdir -p /opt/llvm-payload \
+    && cp -a "/usr/lib/llvm-${LLVM_LATEST}/." /opt/llvm-payload/ \
+    && echo "${LLVM_LATEST}" > /opt/llvm-payload/.llvm-version
 
 # 主阶段
 # 基于 devcontainers/base
@@ -422,13 +422,17 @@ RUN set -eux \
     && ln -sf /usr/local/bin/ninja /usr/bin/ninja
 
 # LLVM/Clang 工具链：从 llvm-builder 阶段 COPY
-COPY --from=llvm-builder /usr/lib/llvm-23 /usr/lib/llvm-23
-COPY --from=llvm-builder /tmp/llvm-version /tmp/llvm-version
+#   分两步走：
+#     1. COPY 固定路径 /opt/llvm-payload（构建阶段版本号未知，只能固定路径）
+#     2. 从 .llvm-version 读出真实版本号，mv 到规范的 /usr/lib/llvm-<ver>
+#   最后软链到 /usr/local/bin，与原有 PATH 策略保持一致
+COPY --from=llvm-builder /opt/llvm-payload /opt/llvm-payload
 RUN set -eux \
-    && LLVM_LATEST="$(cat /tmp/llvm-version)" \
-    && rm -f /tmp/llvm-version \
+    && LLVM_LATEST="$(cat /opt/llvm-payload/.llvm-version)" \
+    && rm -f /opt/llvm-payload/.llvm-version \
+    && mv /opt/llvm-payload "/usr/lib/llvm-${LLVM_LATEST}" \
     && echo "${LLVM_LATEST}" > /usr/local/share/llvm-version \
-    && for tool in /usr/lib/llvm-${LLVM_LATEST}/bin/*; do \
+    && for tool in "/usr/lib/llvm-${LLVM_LATEST}/bin/"*; do \
             [ -e "${tool}" ] || continue; \
             name="$(basename "${tool}")"; \
             ln -sf "${tool}" "/usr/local/bin/${name}"; \
