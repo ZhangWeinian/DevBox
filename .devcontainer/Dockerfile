@@ -14,14 +14,13 @@ FROM mcr.microsoft.com/openjdk/jdk:${JDK_MAJOR_VERSION}-distroless AS jdk-src
 FROM node:${NODE_VARIANT} AS node-src
 
 # 主阶段
-# 基于 devcontainers/base 而非 devcontainers/cpp
+# 基于 devcontainers/base
 FROM mcr.microsoft.com/devcontainers/base:${VARIANT}
 
-# 重新声明 ARG，使其在当前 stage 的 RUN/COPY/ENV 中可用
 ARG GCC_EXTRA_MAJOR_VERSION
 ARG JDK_MAJOR_VERSION
 
-# 架构防御：交叉编译工具链 / vcpkg triplet 均按 amd64 宿主机硬编码，
+# 架构防御：交叉编译工具链 / vcpkg triplet 均按 amd64 宿主机硬编码
 RUN set -eux \
     && [ "$(dpkg --print-architecture)" = "amd64" ] || { \
             echo "FATAL: This Dockerfile only supports the construction of AMD64 basic images" >&2; \
@@ -52,12 +51,12 @@ RUN set -eux \
     && fc-cache -f >/dev/null 2>&1 \
     && fc-list :lang=zh family | grep -qi 'noto sans cjk'
 
-# 全局默认 locale 与时区：ENV 写入镜像元数据，容器内所有进程默认继承
+# 全局默认 locale 与时区
 ENV LANG=zh_CN.UTF-8 \
     LANGUAGE=zh_CN:zh \
     TZ=Asia/Shanghai
 
-# 中文环境验证：断言全部静默（-q / 重定向），失败即构建失败
+# 中文环境验证：断言全部静默（-q / 重定向）
 RUN set -eux \
     && locale | grep -q '^LANG=zh_CN' \
     && locale -a | grep -qi 'zh_CN.utf8' \
@@ -210,7 +209,7 @@ RUN set -eux \
     && fc-list :lang=zh family | grep -i 'noto sans cjk' | head -n 3
 
 # 全局默认 locale：简体中文 UTF-8
-#   故意不设 LC_ALL：LANG/LANGUAGE 已足够让 glibc 走 UTF-8 + gettext 走简中翻译，
+#   故意不设 LC_ALL：LANG/LANGUAGE 已足够让 glibc 走 UTF-8 + gettext 走简中翻译
 #   LC_ALL 留空可保留 "LC_ALL=C <cmd>" 的单命令逃生口（个别老式脚本对非 C locale 敏感）
 ENV LANG=zh_CN.UTF-8
 ENV LANGUAGE=zh_CN:zh
@@ -234,22 +233,21 @@ RUN set -eux \
 # GCC 16：新增第二套 GCC 工具链（含 arm64 交叉），注册为系统默认
 #
 # 设计要点：
-#   - 保留 build-essential 附带的系统默认 GCC（版本随基础镜像滚动，动态探测），
+#   - 保留 build-essential 附带的系统默认 GCC（版本随基础镜像滚动，动态探测）
 #     其配套 arm64 交叉工具已在"基础系统包"步骤安装（gcc/g++-aarch64-linux-gnu）
-#   - GCC 16 从 Debian unstable 单独拉取：编译器本体（本机 + arm64 交叉）、
-#     libgcc/libstdc++ dev 包、binutils-aarch64-linux-gnu 必须同源同事务安装，
-#     保证汇编器认识新版编译器的输出（.aeabi_subsection 等新伪指令），
-#     避免"本机编译通过、交叉编译失败"
+#   - GCC 16 从 Debian unstable 单独拉取：编译器本体（本机 + arm64 交叉）
+#     libgcc/libstdc++ dev 包、binutils-aarch64-linux-gnu 必须同源同事务安装
+#     保证汇编器认识新版编译器的输出（.aeabi_subsection 等新伪指令）
 #   - unstable 源配 APT Pinning（Pin-Priority 100），只影响显式 -t unstable
-#     安装的包，装完立即移除；libc6-dev-arm64-cross（目标侧 sysroot）留在稳定源，
+#     安装的包，装完立即移除；libc6-dev-arm64-cross（目标侧 sysroot）留在稳定源
 #     glibc 向后兼容，较旧目标头文件编译的产物可在更新的目标上运行
-#   - 用 update-alternatives --slave 标准方式注册两套 GCC（Debian gcc-defaults 同款），
+#   - 用 update-alternatives --slave 标准方式注册两套 GCC（Debian gcc-defaults 同款）
 #     显式 --set 到 GCC 16 成为系统默认；旧版仍可用 gcc-14 版本化入口或
 #     `update-alternatives --config gcc` 访问
 #   - cpp 不经过 alternatives：Debian 的 cpp 替代组在此基础镜像中状态易损坏
-#     （/etc/alternatives/cpp 会形成符号链接环，--install 报 Too many levels），
+#     （/etc/alternatives/cpp 会形成符号链接环，--install 报 Too many levels）
 #     直接软链到 cpp-16 更稳；旧版 cpp-14 仍可用版本化入口调用
-#   - 交叉编译器版本化入口 aarch64-linux-gnu-gcc-{14,16} 由各包自带，
+#   - 交叉编译器版本化入口 aarch64-linux-gnu-gcc-{14,16} 由各包自带
 #     无版本号入口软链指向默认版本（GCC 16）；cc/c++ 是 gcc-defaults 指向
 #     gcc/g++ 主链接的 alternatives 组，随选择自动跟随
 #   - 探测到的版本号落盘 /usr/local/share/gcc-{default,extra}-version，供冒烟测试读取
@@ -338,14 +336,14 @@ RUN set -eux \
         "${UV_CACHE_DIR}" \
         "${PIP_CACHE_DIR}"
 
-# Python：通过 uv 安装最新受管理版本，并建立全局软链，
+# Python：通过 uv 安装最新受管理版本，并建立全局软链
 # 全程只有一套 Python，工具链和临时脚本都能找到，不产生版本歧义
 RUN set -eux \
     && su vscode -c "\
         set -eux \
         && uv python install --python-preference only-managed \
     "
-# uv 托管的 Python（python-build-standalone）bin/ 下必有 python3；
+# uv 托管的 Python（python-build-standalone）bin/ 下必有 python3
 # python 一并软链跟随；pip 不做全局软链——本环境包管理统一走 uv（uv pip / uv tool）
 RUN set -eux \
     && PYTHON_BIN="$(uv python find --python-preference only-managed)" \
@@ -459,9 +457,7 @@ RUN set -eux \
         && rm -f /tmp/test_* \
     '
 
-# Microsoft OpenJDK：从 distroless 镜像拷贝，
-#   保留 JDK 是为了运行第三方 Java 工具链，不是本环境的开发核心
-#   安装路径 / JAVA_HOME 由 JDK_MAJOR_VERSION 派生，与顶部全局 ARG 联动，改版本只动一处
+# Microsoft OpenJDK：从 distroless 镜像拷贝
 ENV JAVA_HOME=/usr/lib/jvm/msopenjdk-${JDK_MAJOR_VERSION}
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 COPY --from=jdk-src /usr/jdk /usr/lib/jvm/msopenjdk-${JDK_MAJOR_VERSION}
@@ -490,7 +486,7 @@ RUN set -eux \
     "
 
 # 个人配置文件
-# 母版统一放在 ~/.format/，作为唯一数据源：
+# 母版统一放在 ~/.format/，作为唯一数据源
 #   - .vimrc          → ~/.vimrc（vim 固定读取此路径，单独软链）
 #   - .clang-format   → ~/.clang-format（供开发者复制到项目目录）
 #   - 其余文件通过 devcontainer.json 中各扩展的绝对路径直接引用
@@ -516,10 +512,10 @@ RUN set -eux \
 
 # ccache：刻意不在 PATH/链接层 启用"透明拦截"
 #   本镜像统一约定：任何路径都解析到 /usr/bin/*
-#     - 预热期：build-vcpkg-deps.sh 显式钉 CC/CXX 并断言；
-#     - 运行期：清空 /usr/lib/ccache 驱动链接（dpkg 装 gcc 类包时可能自动重建，
+#     - 预热期：build-vcpkg-deps.sh 显式钉 CC/CXX 并断言
+#     - 运行期：清空 /usr/lib/ccache 驱动链接（dpkg 装 gcc 类包时可能自动重建
 #       故构建末尾显式清空），并由 /etc/profile.d/00-no-ccache-path.sh
-#       兜底剔除 PATH 中的该目录。
+#       兜底剔除 PATH 中的该目录
 RUN rm -rf /usr/lib/ccache
 
 COPY <<'EOF' /etc/profile.d/00-no-ccache-path.sh
@@ -541,13 +537,13 @@ ENV CMAKE_CXX_COMPILER_LAUNCHER=/usr/bin/ccache
 #
 # 设计要点：
 #   - 默认 WITH_VCPKG=0：只保留 vcpkg 本体——环境变量、官方仓库、vcpkg
-#     可执行文件（clone 后 bootstrap），不编译任何库，构建快、体积小。
+#     可执行文件（clone 后 bootstrap），不编译任何库，构建快、体积小
 #   - WITH_VCPKG=1（build.sh --with-vcpkg）：按 vcpkg.json.in 预编译
-#     x64 + arm64 两套依赖，耗时且占磁盘，仅在确实需要时开启。
-#   VCPKG_DOWNLOADS 指向 /home/vscode/.cache/vcpkg/downloads，
-#   与 --mount=type=cache 的挂载点及 import.sh 的具名卷路径保持一致，
+#     x64 + arm64 两套依赖，耗时且占磁盘，仅在确实需要时开启
+#   VCPKG_DOWNLOADS 指向 /home/vscode/.cache/vcpkg/downloads
+#   与 --mount=type=cache 的挂载点及 import.sh 的具名卷路径保持一致
 #   是缓存持久化架构的组成部分，不可随意更改
-#   VCPKG_BINARY_SOURCES 中 archives 路径故意不使用 cache mount，编译产物会提交进镜像层，
+#   VCPKG_BINARY_SOURCES 中 archives 路径故意不使用 cache mount，编译产物会提交进镜像层
 #   供 import.sh 同步至持久化具名卷（若也用 cache mount，archives 将只存在于 BuildKit
 #   构建缓存，最终镜像中该路径为空，持久化卷无法从镜像获得初始内容）
 ARG WITH_VCPKG=0
@@ -560,16 +556,6 @@ ENV VCPKG_DEFAULT_TRIPLET=x64-linux
 ENV PATH="${PATH}:${VCPKG_ROOT}"
 
 # 显式 clone vcpkg，并无条件补齐 master 全量历史
-#   为什么必须 unshallow（即使 WITH_VCPKG=0 空架子构建）：
-#     manifest 模式解析 builtin-baseline 需要目标 commit 在本地 git 对象库中
-#     （vcpkg 通过 `git show <sha>:versions/baseline.json` 读取）。
-#     浅克隆只有 HEAD 一个 commit；当项目 baseline 早于构建日时，
-#     运行时解析会失败并提示联网 `git fetch` —— 弱网/离线环境不可用，
-#     具名卷里的二进制缓存也就无法被使用。
-#     补齐后，任意历史 baseline 均可离线解析。
-#   说明：build-vcpkg-deps.sh（仅 WITH_VCPKG=1）里也有同样的 unshallow 动作，
-#     此处执行后那里会自然跳过（幂等）；本步骤失败即构建失败——宁可构建时暴露，
-#     也不要在运行时踩"缓存用不了"的坑。
 RUN set -eux \
     && mkdir -p /home/vscode/.cache/vcpkg/downloads \
     && chown vscode:vscode /home/vscode/.cache/vcpkg/downloads \
@@ -585,12 +571,9 @@ COPY <<'EOF' /tmp/build-vcpkg-deps.sh
 #!/usr/bin/env bash
 set -eux
 
-# 与运行期保持编译器解析一致（vcpkg ABI 含"编译器身份"，这是硬约定）：
-#   本镜像统一 /usr/bin/*；此处显式钉 CC/CXX 并断言，防 su/PAM/登录链路漂移。
-#   断言失败说明镜像环境被人为改回了 ccache 包装，必须修环境而不是绕过
+# 与运行期保持编译器解析一致（vcpkg ABI 含"编译器身份"）
 export VCPKG_ROOT="${VCPKG_ROOT:-/usr/local/vcpkg}"
-# export CC=/usr/bin/gcc
-# export CXX=/usr/bin/c++
+export VCPKG_CMAKE_LAUNCHER=/usr/bin/ccache
 case ":${PATH}:" in
     *":${VCPKG_ROOT}:"*) ;;
     *) export PATH="${PATH}:${VCPKG_ROOT}" ;;
@@ -605,9 +588,6 @@ case "$(command -v c++)" in
 esac
 
 # 刷新 vcpkg 本体到当前默认分支最新 commit
-#    基础镜像自带（或上面显式 clone）的 vcpkg 通常是浅克隆（--depth 1），
-#    只有普通 fetch 不会补全历史；manifest 模式解析历史版本 port 时需要完整
-#    git 历史（通过 git read-tree 访问历史 tree object），必须显式 unshallow
 DEFAULT_BRANCH=""
 for i in 1 2 3; do
     DEFAULT_BRANCH=$(git -C "${VCPKG_ROOT}" remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}')
@@ -632,15 +612,12 @@ bash "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
 vcpkg --version
 
 # 用当前 HEAD commit sha 作为 builtin-baseline，动态生成 vcpkg.json
-#    不写死版本号，每次构建都对应当时 vcpkg registry 的最新状态
 BASELINE=$(git -C "${VCPKG_ROOT}" rev-parse HEAD)
 jq --arg baseline "${BASELINE}" '.["builtin-baseline"] = $baseline' \
     /home/vscode/.vcpkg-manifest/vcpkg.json.in > /home/vscode/.vcpkg-manifest/vcpkg.json
 cat /home/vscode/.vcpkg-manifest/vcpkg.json
 
-# 按 manifest 安装依赖（两个 triplet 各跑一次）
-#    x64-linux：在 amd64 宿主机上原生编译
-#    arm64-linux：在 amd64 宿主机上交叉编译，产物供 arm64 目标设备使用
+# 按 manifest 安装依赖
 cd /home/vscode/.vcpkg-manifest
 vcpkg install --triplet x64-linux   --x-install-root=/home/vscode/.vcpkg-manifest/vcpkg_installed
 vcpkg install --triplet arm64-linux --x-install-root=/home/vscode/.vcpkg-manifest/vcpkg_installed
@@ -650,8 +627,8 @@ rm -rf /home/vscode/.vcpkg-manifest/buildtrees \
        /home/vscode/.vcpkg-manifest/packages
 EOF
 
-# downloads / ccache 使用 BuildKit cache mount（只加速重复构建，不进最终镜像，符合预期）：
-#   ccache：依赖编译也经 CMAKE_<LANG>_COMPILER_LAUNCHER 环境变量注入的启动器，
+# downloads / ccache 使用 BuildKit cache mount（只加速重复构建，不进最终镜像）
+#   ccache：依赖编译也经 CMAKE_<LANG>_COMPILER_LAUNCHER 环境变量注入的启动器
 #   缓存放 BuildKit 缓存可跨构建复用，同时避免把大量编译缓存写进镜像层
 # archives 不使用 cache mount（编译产物必须进镜像层，供 import.sh 同步至持久化卷）
 # 只有 WITH_VCPKG=1（build.sh --with-vcpkg）才真正执行 manifest 依赖编译
