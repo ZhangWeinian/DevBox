@@ -385,7 +385,7 @@ RUN set -eux \
     && curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh \
     && chmod +x /tmp/llvm.sh \
     && /tmp/llvm.sh "${LLVM_LATEST}" \
-    && apt-get install -y --no-install-recommends \
+    && aptitude install -y --no-install-recommends \
         clang-format-${LLVM_LATEST} \
         clang-tidy-${LLVM_LATEST} \
         clang-tools-${LLVM_LATEST} \
