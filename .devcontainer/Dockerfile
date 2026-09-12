@@ -57,6 +57,10 @@ RUN set -eux \
         llvm-${LLVM_LATEST}-tools \
         bolt-${LLVM_LATEST} \
     && rm -rf /var/lib/apt/lists/* \
+    && echo "--- /usr/bin/clang* ---" \
+    && ls -la /usr/bin/clang* 2>&1 || true \
+    && echo "--- /usr/lib/llvm-${LLVM_LATEST}/bin ---" \
+    && ls -la "/usr/lib/llvm-${LLVM_LATEST}/bin/" 2>&1 || true \
     && test -x "/usr/bin/clang-${LLVM_LATEST}" \
     && test -x "/usr/bin/llvm-config-${LLVM_LATEST}" \
     && INSTALLED_VER="$(/usr/bin/llvm-config-${LLVM_LATEST} --version | cut -d. -f1)" \
