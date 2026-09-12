@@ -24,10 +24,9 @@ FROM node:${NODE_VARIANT} AS node-src
 #   完全不触碰主镜像的 libc6，也不影响主镜像任何其他工具链
 #
 #   LLVM 二进制对 glibc 向后兼容（旧编译 → 新运行 OK）
-#   debian:12 上编出的 LLVM 在 debian13 主镜像里可正常执行
 #   clang 查找 builtin 头文件时按可执行文件相对路径探测
 #   因此必须保持 /usr/lib/llvm-<ver> 路径在两个阶段完全一致
-FROM debian:12 AS llvm-builder
+FROM debian:13 AS llvm-builder
 ARG DEBIAN_FRONTEND=noninteractive
 RUN set -eux \
     && apt-get update \
@@ -36,6 +35,7 @@ RUN set -eux \
         gnupg \
         ca-certificates \
         lsb-release \
+        software-properties-common \
     && rm -rf /var/lib/apt/lists/* \
     && LLVM_LATEST=$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest \
         | grep -Po '"tag_name":\s*"llvmorg-\K[0-9]+') \
@@ -43,7 +43,9 @@ RUN set -eux \
     && curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh \
     && chmod +x /tmp/llvm.sh \
     && /tmp/llvm.sh "${LLVM_LATEST}" \
-    && apt-get install -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends --allow-downgrades \
+        libc6 \
+        libc6-i386 \
         clang-format-${LLVM_LATEST} \
         clang-tidy-${LLVM_LATEST} \
         clang-tools-${LLVM_LATEST} \
@@ -52,6 +54,7 @@ RUN set -eux \
         bolt-${LLVM_LATEST} \
     && rm -f /tmp/llvm.sh \
     && rm -rf /var/lib/apt/lists/* \
+    && test -x "/usr/lib/llvm-${LLVM_LATEST}/bin/clang" \
     && /usr/lib/llvm-${LLVM_LATEST}/bin/clang --version
 
 # 主阶段
