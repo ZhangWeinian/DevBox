@@ -41,7 +41,6 @@ RUN set -eux \
         libc6 \
         libc6-i386 \
         bolt-${LLVM_LATEST} \
-        lldb-${LLVM_LATEST}-tools \
     && rm -f /tmp/llvm.sh \
     && rm -rf /var/lib/apt/lists/* \
     && test -x "/usr/bin/clang-${LLVM_LATEST}" \
