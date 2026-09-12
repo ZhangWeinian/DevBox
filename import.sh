@@ -222,11 +222,16 @@ if [ "${RESET_CACHE}" -eq 1 ]; then
 fi
 
 # 组装 docker run 参数：工作区 bind mount + 全部持久化缓存卷 + --init
+# seccomp: 放行 personality(ADDR_NO_RANDOMIZE) —— lldb 调试启动 / TSan 关闭 ASLR 依赖它;
+# Docker 默认 profile 会以 EPERM 拒绝该参数 (表现为 "personality set failed" /
+# "unable to disable ASLR")。如需最小权限, 可改为自定义 profile:
+#   --security-opt seccomp=<custom.json>  (默认 profile + 放行 personality 的 0x40000)
 DOCKER_RUN_ARGS=(
     -d
     --name "${CONTAINER_NAME}"
     --restart unless-stopped
     --init
+    --security-opt seccomp=unconfined
     -v "${MOUNT_DIR}:${CONTAINER_TARGET}"
 )
 
