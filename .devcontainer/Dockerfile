@@ -16,6 +16,7 @@ FROM node:${NODE_VARIANT} AS node-src
 # 辅助阶段：LLVM/Clang 工具链（独立阶段，避免污染主镜像）
 FROM debian:13 AS llvm-builder
 ARG DEBIAN_FRONTEND=noninteractive
+
 RUN set -eux \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -32,13 +33,18 @@ RUN set -eux \
        fi \
     && curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
         | gpg --dearmor -o /usr/share/keyrings/llvm-snapshot.gpg \
-    && cat > /etc/apt/sources.list.d/llvm.sources <<EOF
+    && echo "${LLVM_LATEST}" > /tmp/llvm-version
+
+RUN LLVM_LATEST="$(cat /tmp/llvm-version)" && cat > /etc/apt/sources.list.d/llvm.sources <<EOF
 Types: deb
 URIs: https://apt.llvm.org/trixie/
 Suites: llvm-toolchain-trixie-${LLVM_LATEST}
 Components: main
 Signed-By: /usr/share/keyrings/llvm-snapshot.gpg
 EOF
+
+RUN set -eux \
+    && LLVM_LATEST="$(cat /tmp/llvm-version)" \
     && apt-get update \
     && apt-get install -y --no-install-recommends --allow-downgrades \
         libc6 \
