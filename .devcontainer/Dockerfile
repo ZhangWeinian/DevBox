@@ -475,6 +475,7 @@ RUN set -eux \
     && clang-tidy --version \
     && clangd --version \
     && lldb --version \
+    && lldb-dap --version \
     && llvm-config --version \
     && command -v lld \
     && command -v ld.lld \
