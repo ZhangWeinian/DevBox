@@ -23,7 +23,6 @@ RUN set -eux \
         gnupg \
         ca-certificates \
         lsb-release \
-        software-properties-common \
     && rm -rf /var/lib/apt/lists/* \
     && LLVM_LATEST=$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest \
         | grep -Po '"tag_name":\s*"llvmorg-\K[0-9]+') \
@@ -31,9 +30,14 @@ RUN set -eux \
            echo "FATAL: 无法从 GitHub API 获取 LLVM 最新版本号" >&2; \
            exit 1; \
        fi \
-    && curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh \
-    && chmod +x /tmp/llvm.sh \
-    && /tmp/llvm.sh "${LLVM_LATEST}" \
+    && curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+        | gpg --dearmor -o /usr/share/keyrings/llvm-snapshot.gpg \
+    && echo "Types: deb
+URIs: https://apt.llvm.org/trixie/
+Suites: llvm-toolchain-trixie-${LLVM_LATEST}
+Components: main
+Signed-By: /usr/share/keyrings/llvm-snapshot.gpg" > /etc/apt/sources.list.d/llvm.sources \
+    && apt-get update \
     && apt-get install -y --no-install-recommends --allow-downgrades \
         libc6 \
         libc6-i386 \
@@ -43,7 +47,6 @@ RUN set -eux \
         libclang-rt-${LLVM_LATEST}-dev \
         llvm-${LLVM_LATEST}-tools \
         bolt-${LLVM_LATEST} \
-    && rm -f /tmp/llvm.sh \
     && rm -rf /var/lib/apt/lists/* \
     && test -x "/usr/lib/llvm-${LLVM_LATEST}/bin/clang" \
     && test -x "/usr/lib/llvm-${LLVM_LATEST}/bin/llvm-config" \
