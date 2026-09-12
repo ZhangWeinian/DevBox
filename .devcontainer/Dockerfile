@@ -49,6 +49,7 @@ RUN set -eux \
     && apt-get install -y --no-install-recommends --allow-downgrades \
         libc6 \
         libc6-i386 \
+        clang-${LLVM_LATEST} \
         clang-format-${LLVM_LATEST} \
         clang-tidy-${LLVM_LATEST} \
         clang-tools-${LLVM_LATEST} \
@@ -56,16 +57,27 @@ RUN set -eux \
         llvm-${LLVM_LATEST}-tools \
         bolt-${LLVM_LATEST} \
     && rm -rf /var/lib/apt/lists/* \
-    && test -x "/usr/lib/llvm-${LLVM_LATEST}/bin/clang" \
-    && test -x "/usr/lib/llvm-${LLVM_LATEST}/bin/llvm-config" \
-    && INSTALLED_VER="$(/usr/lib/llvm-${LLVM_LATEST}/bin/llvm-config --version | cut -d. -f1)" \
+    && test -x "/usr/bin/clang-${LLVM_LATEST}" \
+    && test -x "/usr/bin/llvm-config-${LLVM_LATEST}" \
+    && INSTALLED_VER="$(/usr/bin/llvm-config-${LLVM_LATEST} --version | cut -d. -f1)" \
     && if [ "${INSTALLED_VER}" != "${LLVM_LATEST}" ]; then \
            echo "FATAL: 期望 LLVM ${LLVM_LATEST}，实际装到 LLVM ${INSTALLED_VER}" >&2; \
            exit 1; \
        fi \
-    && /usr/lib/llvm-${LLVM_LATEST}/bin/clang --version \
+    && /usr/bin/clang-${LLVM_LATEST} --version \
     && mkdir -p /opt/llvm-payload \
-    && cp -a "/usr/lib/llvm-${LLVM_LATEST}/." /opt/llvm-payload/ \
+    && if [ -d "/usr/lib/llvm-${LLVM_LATEST}" ]; then \
+           cp -a "/usr/lib/llvm-${LLVM_LATEST}/." /opt/llvm-payload/; \
+       fi \
+    && mkdir -p /opt/llvm-payload/bin \
+    && for tool in /usr/bin/*-${LLVM_LATEST}; do \
+           [ -e "${tool}" ] || continue; \
+           name="$(basename "${tool}")"; \
+           name_no_ver="${name%-${LLVM_LATEST}}"; \
+           if [ ! -e "/opt/llvm-payload/bin/${name_no_ver}" ]; then \
+               cp -aL "${tool}" "/opt/llvm-payload/bin/${name_no_ver}"; \
+           fi; \
+       done \
     && echo "${LLVM_LATEST}" > /opt/llvm-payload/.llvm-version
 
 # 主阶段
