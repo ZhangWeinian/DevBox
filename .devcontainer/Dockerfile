@@ -50,20 +50,26 @@ RUN set -eux \
            exit 1; \
        fi \
     && /usr/bin/clang-${LLVM_LATEST} --version \
-    && mkdir -p /opt/llvm-payload \
-    && if [ -d "/usr/lib/llvm-${LLVM_LATEST}" ]; then \
-           cp -a "/usr/lib/llvm-${LLVM_LATEST}/." /opt/llvm-payload/; \
-       fi \
-    && mkdir -p /opt/llvm-payload/bin \
-    && for tool in /usr/bin/*-${LLVM_LATEST}; do \
-           [ -e "${tool}" ] || continue; \
-           name="$(basename "${tool}")"; \
-           name_no_ver="${name%-${LLVM_LATEST}}"; \
-           if [ ! -e "/opt/llvm-payload/bin/${name_no_ver}" ]; then \
-               cp -aL "${tool}" "/opt/llvm-payload/bin/${name_no_ver}"; \
-           fi; \
+    && mkdir -p /opt/llvm-files \
+    && LLVM_PKGS=$(dpkg-query -W -f='${Package}\n' \
+           | grep -E "(llvm|clang|lld|lldb|bolt|libclang|libllvm|liblldb|libomp)" \
+           | grep -E "${LLVM_LATEST}" \
+           | sort -u) \
+    && echo "${LLVM_PKGS}" \
+    && for pkg in ${LLVM_PKGS}; do \
+           dpkg -L "${pkg}"; \
        done \
-    && echo "${LLVM_LATEST}" > /opt/llvm-payload/.llvm-version
+       | sort -u \
+       | grep -vE "^/usr/share/(doc|man|bash-completion|lintian)" \
+       | grep -vE "^/usr/share/apport" \
+       | while read -r f; do \
+           [ -e "${f}" ] || [ -L "${f}" ] || continue; \
+           [ -d "${f}" ] && continue; \
+           mkdir -p "/opt/llvm-files$(dirname "${f}")"; \
+           cp -a "${f}" "/opt/llvm-files${f}"; \
+       done \
+    && echo "${LLVM_LATEST}" > /opt/llvm-files/.llvm-version \
+    && du -sh /opt/llvm-files
 
 # 主阶段
 # 基于 devcontainers/base
@@ -434,17 +440,34 @@ RUN set -eux \
 #     1. COPY 固定路径 /opt/llvm-payload（构建阶段版本号未知，只能固定路径）
 #     2. 从 .llvm-version 读出真实版本号，mv 到规范的 /usr/lib/llvm-<ver>
 #   最后软链到 /usr/local/bin，与原有 PATH 策略保持一致
-COPY --from=llvm-builder /opt/llvm-payload /opt/llvm-payload
+COPY --from=llvm-builder /opt/llvm-files /opt/llvm-files
 RUN set -eux \
-    && LLVM_LATEST="$(cat /opt/llvm-payload/.llvm-version)" \
-    && rm -f /opt/llvm-payload/.llvm-version \
-    && mv /opt/llvm-payload "/usr/lib/llvm-${LLVM_LATEST}" \
+    && LLVM_LATEST="$(cat /opt/llvm-files/.llvm-version)" \
+    && rm -f /opt/llvm-files/.llvm-version \
+    && cp -a /opt/llvm-files/. / \
+    && rm -rf /opt/llvm-files \
     && echo "${LLVM_LATEST}" > /usr/local/share/llvm-version \
-    && for tool in "/usr/lib/llvm-${LLVM_LATEST}/bin/"*; do \
-            [ -e "${tool}" ] || continue; \
-            name="$(basename "${tool}")"; \
-            ln -sf "${tool}" "/usr/local/bin/${name}"; \
-        done \
+    && ldconfig \
+    && for tool in /usr/lib/llvm-${LLVM_LATEST}/bin/*; do \
+           [ -e "${tool}" ] || continue; \
+           name="$(basename "${tool}")"; \
+           if [ ! -e "/usr/local/bin/${name}" ]; then \
+               ln -sf "${tool}" "/usr/local/bin/${name}"; \
+           fi; \
+       done \
+    && for tool in /usr/bin/*-${LLVM_LATEST}; do \
+           [ -e "${tool}" ] || continue; \
+           name="$(basename "${tool}")"; \
+           name_no_ver="${name%-${LLVM_LATEST}}"; \
+           if [ ! -e "/usr/local/bin/${name_no_ver}" ]; then \
+               ln -sf "${tool}" "/usr/local/bin/${name_no_ver}"; \
+           fi; \
+       done \
+    && ldd "$(command -v clang)" | grep -q "not found" && { \
+           echo "FATAL: clang 存在未解析的共享库依赖" >&2; \
+           ldd "$(command -v clang)" | grep "not found" >&2; \
+           exit 1; \
+       } || true \
     && clang --version \
     && clang++ --version \
     && clang-format --version \
@@ -452,9 +475,13 @@ RUN set -eux \
     && clangd --version \
     && lldb --version \
     && llvm-config --version \
+    && command -v lld \
     && command -v ld.lld \
+    && command -v lld-link \
+    && command -v wasm-ld \
     && command -v llvm-ar \
     && command -v llvm-nm \
+    && command -v llvm-objcopy \
     && command -v llvm-objdump \
     && command -v llvm-ranlib \
     && command -v llvm-strip \
