@@ -16,7 +16,6 @@ FROM node:${NODE_VARIANT} AS node-src
 # 辅助阶段：LLVM/Clang 工具链（独立阶段，避免污染主镜像）
 FROM debian:13 AS llvm-builder
 ARG DEBIAN_FRONTEND=noninteractive
-
 RUN set -eux \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -31,36 +30,18 @@ RUN set -eux \
            echo "FATAL: 无法从 GitHub API 获取 LLVM 最新版本号" >&2; \
            exit 1; \
        fi \
-    && curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
-        | gpg --dearmor -o /usr/share/keyrings/llvm-snapshot.gpg \
-    && echo "${LLVM_LATEST}" > /tmp/llvm-version
-
-RUN LLVM_LATEST="$(cat /tmp/llvm-version)" && cat > /etc/apt/sources.list.d/llvm.sources <<EOF
-Types: deb
-URIs: https://apt.llvm.org/trixie/
-Suites: llvm-toolchain-trixie-${LLVM_LATEST}
-Components: main
-Signed-By: /usr/share/keyrings/llvm-snapshot.gpg
-EOF
-
-RUN set -eux \
-    && LLVM_LATEST="$(cat /tmp/llvm-version)" \
-    && apt-get update \
+    && echo "${LLVM_LATEST}" > /tmp/llvm-version \
+    && curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh \
+    && chmod +x /tmp/llvm.sh \
+    && export DEBIAN_CODENAME="unstable" \
+    && export UBUNTU_CODENAME="unstable" \
+    && export VERSION_CODENAME="unstable" \
+    && /tmp/llvm.sh "${LLVM_LATEST}" all \
     && apt-get install -y --no-install-recommends --allow-downgrades \
         libc6 \
         libc6-i386 \
-        clang-${LLVM_LATEST} \
-        clang-format-${LLVM_LATEST} \
-        clang-tidy-${LLVM_LATEST} \
-        clang-tools-${LLVM_LATEST} \
-        libclang-rt-${LLVM_LATEST}-dev \
-        llvm-${LLVM_LATEST}-tools \
-        bolt-${LLVM_LATEST} \
+    && rm -f /tmp/llvm.sh \
     && rm -rf /var/lib/apt/lists/* \
-    && echo "--- /usr/bin/clang* ---" \
-    && ls -la /usr/bin/clang* 2>&1 || true \
-    && echo "--- /usr/lib/llvm-${LLVM_LATEST}/bin ---" \
-    && ls -la "/usr/lib/llvm-${LLVM_LATEST}/bin/" 2>&1 || true \
     && test -x "/usr/bin/clang-${LLVM_LATEST}" \
     && test -x "/usr/bin/llvm-config-${LLVM_LATEST}" \
     && INSTALLED_VER="$(/usr/bin/llvm-config-${LLVM_LATEST} --version | cut -d. -f1)" \
