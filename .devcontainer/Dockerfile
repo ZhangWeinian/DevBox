@@ -377,10 +377,11 @@ RUN set -eux \
     && ln -sf /usr/local/bin/cmake /usr/bin/cmake \
     && ln -sf /usr/local/bin/ninja /usr/bin/ninja
 
-# LLVM/Clang 工具链：使用 apt.llvm.org 仓库，安装核心工具并避开 libclang-rt
+# LLVM/Clang 工具链：使用 apt.llvm.org 仓库
 RUN set -eux \
     && LLVM_LATEST=$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest \
         | grep -Po '"tag_name":\s*"llvmorg-\K[0-9]+') \
+    && echo "==> 安装 LLVM/Clang ${LLVM_LATEST}" \
     && curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh \
     && chmod +x /tmp/llvm.sh \
     && /tmp/llvm.sh "${LLVM_LATEST}" \
@@ -388,13 +389,18 @@ RUN set -eux \
         clang-format-${LLVM_LATEST} \
         clang-tidy-${LLVM_LATEST} \
         clang-tools-${LLVM_LATEST} \
+        libclang-rt-${LLVM_LATEST}-dev \
+        llvm-${LLVM_LATEST}-tools \
+        bolt-${LLVM_LATEST} \
     && rm -f /tmp/llvm.sh \
     && apt-get autoremove -y \
     && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/* \
-    && for tool in clang clang++ clang-format clang-tidy clangd lldb lld ld.lld llvm-config; do \
-            src="/usr/bin/${tool}-${LLVM_LATEST}"; \
-            if [ -x "${src}" ]; then ln -sf "${src}" "/usr/local/bin/${tool}"; fi; \
+    && echo "${LLVM_LATEST}" > /usr/local/share/llvm-version \
+    && for tool in /usr/lib/llvm-${LLVM_LATEST}/bin/*; do \
+            [ -e "${tool}" ] || continue; \
+            name="$(basename "${tool}")"; \
+            ln -sf "${tool}" "/usr/local/bin/${name}"; \
         done \
     && clang --version \
     && clang++ --version \
@@ -403,7 +409,18 @@ RUN set -eux \
     && clangd --version \
     && lldb --version \
     && llvm-config --version \
-    && command -v ld.lld
+    && command -v ld.lld \
+    && command -v llvm-ar \
+    && command -v llvm-nm \
+    && command -v llvm-objdump \
+    && command -v llvm-ranlib \
+    && command -v llvm-strip \
+    && command -v llvm-symbolizer \
+    && command -v llvm-cov \
+    && command -v llvm-profdata \
+    && command -v llvm-bolt \
+    && command -v opt \
+    && command -v llc
 
 # 快速测试
 RUN set -eux \
