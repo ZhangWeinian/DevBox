@@ -32,11 +32,13 @@ RUN set -eux \
        fi \
     && curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
         | gpg --dearmor -o /usr/share/keyrings/llvm-snapshot.gpg \
-    && echo "Types: deb
+    && cat > /etc/apt/sources.list.d/llvm.sources <<EOF
+Types: deb
 URIs: https://apt.llvm.org/trixie/
 Suites: llvm-toolchain-trixie-${LLVM_LATEST}
 Components: main
-Signed-By: /usr/share/keyrings/llvm-snapshot.gpg" > /etc/apt/sources.list.d/llvm.sources \
+Signed-By: /usr/share/keyrings/llvm-snapshot.gpg
+EOF
     && apt-get update \
     && apt-get install -y --no-install-recommends --allow-downgrades \
         libc6 \
