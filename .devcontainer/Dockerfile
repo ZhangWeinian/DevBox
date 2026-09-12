@@ -13,6 +13,47 @@ FROM mcr.microsoft.com/openjdk/jdk:${JDK_MAJOR_VERSION}-distroless AS jdk-src
 # 务必用 Debian 系变体（默认即是），不要用 -alpine：musl 与基础镜像 glibc 不兼容
 FROM node:${NODE_VARIANT} AS node-src
 
+# 辅助阶段：LLVM/Clang 工具链
+#
+# 为什么独立阶段：
+#   apt.llvm.org 的 libclang-rt-<ver>-dev 依赖 libc6-i386
+#   而 libc6-i386 又要求 libc6 精确到某个版本号，与主镜像
+#   devcontainers/base:debian13 自带的 libc6（更新）冲突
+#   解决方案：在 debian:12（libc6 与 libc6-i386 天然配套）中装好
+#   再把 /usr/lib/llvm-<ver> 整目录 COPY 到主阶段
+#   完全不触碰主镜像的 libc6，也不影响主镜像任何其他工具链
+#
+#   LLVM 二进制对 glibc 向后兼容（旧编译 → 新运行 OK）
+#   debian:12 上编出的 LLVM 在 debian13 主镜像里可正常执行
+#   clang 查找 builtin 头文件时按可执行文件相对路径探测
+#   因此必须保持 /usr/lib/llvm-<ver> 路径在两个阶段完全一致
+FROM debian:12 AS llvm-builder
+ARG DEBIAN_FRONTEND=noninteractive
+RUN set -eux \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        curl \
+        gnupg \
+        ca-certificates \
+        lsb-release \
+    && rm -rf /var/lib/apt/lists/* \
+    && LLVM_LATEST=$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest \
+        | grep -Po '"tag_name":\s*"llvmorg-\K[0-9]+') \
+    && echo "${LLVM_LATEST}" > /tmp/llvm-version \
+    && curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh \
+    && chmod +x /tmp/llvm.sh \
+    && /tmp/llvm.sh "${LLVM_LATEST}" \
+    && apt-get install -y --no-install-recommends \
+        clang-format-${LLVM_LATEST} \
+        clang-tidy-${LLVM_LATEST} \
+        clang-tools-${LLVM_LATEST} \
+        libclang-rt-${LLVM_LATEST}-dev \
+        llvm-${LLVM_LATEST}-tools \
+        bolt-${LLVM_LATEST} \
+    && rm -f /tmp/llvm.sh \
+    && rm -rf /var/lib/apt/lists/* \
+    && /usr/lib/llvm-${LLVM_LATEST}/bin/clang --version
+
 # 主阶段
 # 基于 devcontainers/base
 FROM mcr.microsoft.com/devcontainers/base:${VARIANT}
@@ -377,25 +418,12 @@ RUN set -eux \
     && ln -sf /usr/local/bin/cmake /usr/bin/cmake \
     && ln -sf /usr/local/bin/ninja /usr/bin/ninja
 
-# LLVM/Clang 工具链：使用 apt.llvm.org 仓库
+# LLVM/Clang 工具链：从 llvm-builder 阶段 COPY
+COPY --from=llvm-builder /usr/lib/llvm-23 /usr/lib/llvm-23
+COPY --from=llvm-builder /tmp/llvm-version /tmp/llvm-version
 RUN set -eux \
-    && LLVM_LATEST=$(curl -fsSL https://api.github.com/repos/llvm/llvm-project/releases/latest \
-        | grep -Po '"tag_name":\s*"llvmorg-\K[0-9]+') \
-    && echo "==> 安装 LLVM/Clang ${LLVM_LATEST}" \
-    && curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh \
-    && chmod +x /tmp/llvm.sh \
-    && /tmp/llvm.sh "${LLVM_LATEST}" \
-    && aptitude install -y --no-install-recommends \
-        clang-format-${LLVM_LATEST} \
-        clang-tidy-${LLVM_LATEST} \
-        clang-tools-${LLVM_LATEST} \
-        libclang-rt-${LLVM_LATEST}-dev \
-        llvm-${LLVM_LATEST}-tools \
-        bolt-${LLVM_LATEST} \
-    && rm -f /tmp/llvm.sh \
-    && apt-get autoremove -y \
-    && apt-get clean -y \
-    && rm -rf /var/lib/apt/lists/* \
+    && LLVM_LATEST="$(cat /tmp/llvm-version)" \
+    && rm -f /tmp/llvm-version \
     && echo "${LLVM_LATEST}" > /usr/local/share/llvm-version \
     && for tool in /usr/lib/llvm-${LLVM_LATEST}/bin/*; do \
             [ -e "${tool}" ] || continue; \
