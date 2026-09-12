@@ -1,3 +1,0 @@
-[submodule ".devcontainer/.format"]
-	path = .devcontainer/.format
-	url = git@github.com:ZhangWeinian/CodeFormatFile.git
