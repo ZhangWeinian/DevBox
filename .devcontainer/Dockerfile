@@ -13,7 +13,7 @@ FROM mcr.microsoft.com/openjdk/jdk:${JDK_MAJOR_VERSION}-distroless AS jdk-src
 # 务必用 Debian 系变体（默认即是），不要用 -alpine：musl 与基础镜像 glibc 不兼容
 FROM node:${NODE_VARIANT} AS node-src
 
-# 辅助阶段：LLVM/Clang 工具链（独立阶段，避免污染主镜像）
+# 辅助阶段：LLVM/Clang 工具链
 FROM debian:13 AS llvm-builder
 ARG DEBIAN_FRONTEND=noninteractive
 RUN set -eux \
@@ -56,7 +56,6 @@ RUN set -eux \
            | grep -E "(llvm|clang|lld|lldb|bolt|libclang|libllvm|liblldb|libomp)" \
            | grep -E "${LLVM_LATEST}" \
            | sort -u) \
-    && echo "${LLVM_PKGS}" \
     && for pkg in ${LLVM_PKGS}; do \
            dpkg -L "${pkg}"; \
        done \
@@ -69,8 +68,7 @@ RUN set -eux \
            mkdir -p "/opt/llvm-files$(dirname "${f}")"; \
            cp -a "${f}" "/opt/llvm-files${f}"; \
        done \
-    && echo "${LLVM_LATEST}" > /opt/llvm-files/.llvm-version \
-    && du -sh /opt/llvm-files
+    && echo "${LLVM_LATEST}" > /opt/llvm-files/.llvm-version
 
 # 主阶段
 # 基于 devcontainers/base
@@ -81,10 +79,14 @@ ARG JDK_MAJOR_VERSION
 
 # 架构防御：交叉编译工具链 / vcpkg triplet 均按 amd64 宿主机硬编码
 RUN set -eux \
-    && [ "$(dpkg --print-architecture)" = "amd64" ] || { \
-            echo "FATAL: This Dockerfile only supports the construction of AMD64 basic images" >&2; \
-            exit 1; \
-        } \
+    && HOST_ARCH="$(dpkg --print-architecture)" \
+    && if [ "${HOST_ARCH}" != "amd64" ]; then \
+           echo "FATAL: 本 Dockerfile 仅支持 amd64 宿主机" >&2; \
+           echo "  检测到架构: ${HOST_ARCH}" >&2; \
+           echo "  原因: 交叉编译工具链与 vcpkg triplet 均按 amd64 硬编码" >&2; \
+           echo "  处理: 在 x86_64 机器上构建，或指定 --platform linux/amd64" >&2; \
+           exit 1; \
+       fi \
     && chown vscode:vscode /usr/local/bin
 
 # 中文环境：locale / 字体 / 时区 / 中文 man
@@ -252,6 +254,15 @@ RUN set -eux \
         qemu-user-static \
         linux-libc-dev \
         linux-libc-dev:arm64 \
+        graphviz \
+        doxygen \
+        lcov \
+        patchelf \
+        shellcheck \
+        heaptrack \
+        bpftrace \
+        iwyu \
+        linux-perf \
     && apt-get autoremove -y \
     && apt-get clean -y \
     && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
@@ -274,8 +285,7 @@ ENV LANG=zh_CN.UTF-8
 ENV LANGUAGE=zh_CN:zh
 RUN set -eux \
     && locale | grep -q '^LANG=zh_CN.UTF-8' \
-    && echo '中文字符流处理验证：简体 UTF-8' | grep -q '中文字符流' \
-    && echo "OK: locale=$(locale 2>/dev/null | grep '^LANG=' | tr -d '"')"
+    && echo '中文字符流处理验证：简体 UTF-8' | grep -q '中文字符流'
 
 ENV TZ=Asia/Shanghai
 RUN set -eux \
@@ -288,6 +298,32 @@ RUN set -eux \
     && curl -fsSL -o /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64" \
     && chmod +x /usr/local/bin/yq \
     && yq --version
+
+# 静态二进制工具（GitHub Release）
+#   rr       ：record & replay 调试器，官方提供 x86_64 静态包
+#   bazelisk ：Bazel 版本管理器，自动下载最新 Bazel
+#   mold     ：极快的链接器，官方提供静态二进制 tar.gz
+RUN set -eux \
+    && TMP_DIR="$(mktemp -d)" \
+    && cd "${TMP_DIR}" \
+    && curl -fsSLO "https://github.com/rr-debugger/rr/releases/latest/download/rr-x86_64-linux.zip" \
+    && unzip -q rr-x86_64-linux.zip -d rr-dist \
+    && mv rr-dist/rr /usr/local/bin/rr \
+    && chmod +x /usr/local/bin/rr \
+    && curl -fsSL -o /usr/local/bin/bazelisk \
+        "https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64" \
+    && chmod +x /usr/local/bin/bazelisk \
+    && ln -sf /usr/local/bin/bazelisk /usr/local/bin/bazel \
+    && curl -fsSLO "https://github.com/rui314/mold/releases/latest/download/mold-x86_64-linux.tar.gz" \
+    && tar -xzf mold-x86_64-linux.tar.gz \
+    && cp -a mold-x86_64-linux/bin/. /usr/local/bin/ \
+    && cp -a mold-x86_64-linux/lib/. /usr/local/lib/ 2>/dev/null || true \
+    && cd / \
+    && rm -rf "${TMP_DIR}" \
+    && ldconfig \
+    && rr --version \
+    && bazelisk version \
+    && mold --version
 
 # GCC 16：新增第二套 GCC 工具链（含 arm64 交叉），注册为系统默认
 #
@@ -357,10 +393,11 @@ RUN set -eux \
     && for c in gcc g++ cc c++ cpp aarch64-linux-gnu-gcc aarch64-linux-gnu-g++; do \
             GOT="$("${c}" -dumpversion | cut -d. -f1)"; \
             if [ "${GOT}" != "${GCC_EXTRA_MAJOR_VERSION}" ]; then \
-                echo "FATAL: ${c} 当前解析到 GCC ${GOT}，预期 ${GCC_EXTRA_MAJOR_VERSION}" >&2; \
+                echo "FATAL: ${c} 解析到 GCC ${GOT}，预期 ${GCC_EXTRA_MAJOR_VERSION}" >&2; \
+                echo "  可能原因：update-alternatives 注册被后续步骤覆盖，或 ccache 驱动未清空" >&2; \
+                echo "  诊断：ls -l /usr/bin/${c}；update-alternatives --display gcc" >&2; \
                 exit 1; \
             fi; \
-            echo "OK: ${c} -> GCC ${GOT}"; \
         done
 
 # .NET 10 LTS
@@ -412,35 +449,47 @@ RUN set -eux \
     && python --version \
     && python3 --version
 
-# CMake / Ninja / cmake-format / ruff / autoenv
-# 通过 uv tool install 安装到隔离虚拟环境，bin 软链到 /usr/local/bin
+# 开发工具（全部通过 uv tool 安装到隔离 venv，bin 软链到 /usr/local/bin）
 RUN set -eux \
     && su vscode -c "\
         set -eux \
         && uv tool install cmake \
         && uv tool install ninja \
+        && uv tool install meson \
         && uv tool install cmakelang \
         && uv tool install autoenv \
         && uv tool install ruff \
+        && uv tool install lizard \
+        && uv tool install mypy \
+        && uv tool install pytest \
+        && uv tool install gcovr \
     "
 RUN set -eux \
     && cmake --version \
     && ninja --version \
+    && meson --version \
     && cmake-format --version \
     && ruff --version \
+    && lizard --version \
+    && mypy --version \
+    && pytest --version \
+    && gcovr --version \
     && su vscode -c "\
         set -eux \
         && cmake --version \
+        && meson --version \
         && ruff --version \
+        && mypy --version \
     " \
     && ln -sf /usr/local/bin/cmake /usr/bin/cmake \
-    && ln -sf /usr/local/bin/ninja /usr/bin/ninja
+    && ln -sf /usr/local/bin/ninja /usr/bin/ninja \
+    && ln -sf /usr/local/bin/meson /usr/bin/meson
 
 # LLVM/Clang 工具链：从 llvm-builder 阶段 COPY
-#   分两步走：
-#     1. COPY 固定路径 /opt/llvm-payload（构建阶段版本号未知，只能固定路径）
-#     2. 从 .llvm-version 读出真实版本号，mv 到规范的 /usr/lib/llvm-<ver>
-#   最后软链到 /usr/local/bin，与原有 PATH 策略保持一致
+#   构建阶段已用 dpkg -L 精确收集"LLVM 包"的全部文件，保留原路径
+#   主阶段直接按路径还原：/usr/bin/*-23、/usr/lib/llvm-23/*、
+#   /usr/lib/x86_64-linux-gnu/libclang-cpp.so.23* 等全部到位
+#   ldconfig 重建缓存后，clang 可正确解析 libclang-cpp.so.23.1 等运行期依赖
 COPY --from=llvm-builder /opt/llvm-files /opt/llvm-files
 RUN set -eux \
     && LLVM_LATEST="$(cat /opt/llvm-files/.llvm-version)" \
@@ -500,7 +549,6 @@ RUN set -eux \
         set -eux \
         && DEF_VER="$(cat /usr/local/share/gcc-default-version)" \
         && NEW_VER="$(cat /usr/local/share/gcc-extra-version)" \
-        && echo "smoke test: system gcc=${DEF_VER}, extra gcc=${NEW_VER}" \
         && echo "int main() { return 0; }" > /tmp/test.c \
         && echo "int main() { return 0; }" > /tmp/test.cpp \
         && gcc-${DEF_VER} /tmp/test.c -o /tmp/test_def_c_local \
@@ -671,7 +719,9 @@ case "$(command -v c++)" in
     /usr/bin/c++)
     ;;
     *)
-    echo "FATAL: c++ 未解析到 /usr/bin/（实际: $(command -v c++)）；请检查 /usr/lib/ccache 是否被重新启用" >&2
+    echo "FATAL: c++ 未解析到 /usr/bin/" >&2
+    echo "  实际解析: $(command -v c++)" >&2
+    echo "  可能原因: /usr/lib/ccache 被重新启用，或 PATH 被登录脚本改写" >&2
     exit 1
     ;;
 esac
@@ -729,7 +779,7 @@ RUN --mount=type=cache,target=/home/vscode/.cache/vcpkg/downloads,id=vcpkg-downl
     && chown -R vscode:vscode /home/vscode/.cache/vcpkg "${VCPKG_ROOT}" /home/vscode/.vcpkg-manifest \
     && if [ "${WITH_VCPKG}" = "1" ]; then \
             su vscode -c /tmp/build-vcpkg-deps.sh; \
-        fi \
+       fi \
     && rm -f /tmp/build-vcpkg-deps.sh
 
 # 创建工作目录、切换到非 root 用户
