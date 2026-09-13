@@ -87,7 +87,8 @@ RUN set -eux \
            echo "  处理: 在 x86_64 机器上构建，或指定 --platform linux/amd64" >&2; \
            exit 1; \
        fi \
-    && chown vscode:vscode /usr/local/bin
+    && chown vscode:vscode /usr/local/bin \
+    && chmod u+w /usr/local/bin
 
 # 中文环境：locale / 字体 / 时区 / 中文 man
 ARG DEBIAN_FRONTEND=noninteractive
