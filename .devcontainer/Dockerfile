@@ -477,6 +477,8 @@ RUN set -eux \
         && uv tool install mypy \
         && uv tool install pytest \
         && uv tool install gcovr \
+        && uv tool install mcp-vector-search \
+        && uv tool install codegraph-cli \
     "
 RUN set -eux \
     && cmake --version \
@@ -488,6 +490,8 @@ RUN set -eux \
     && mypy --version \
     && pytest --version \
     && gcovr --version \
+    && mcp-vector-search --version \
+    && codegraph-cli --version \
     && su vscode -c "\
         set -eux \
         && cmake --version \
@@ -615,7 +619,7 @@ COPY --from=jdk-src /usr/jdk /usr/lib/jvm/msopenjdk-${JDK_MAJOR_VERSION}
 RUN set -eux \
     && java --version
 
-# Node.js：多阶段拷贝，含 node-gyp 编译原生插件所需的头文件，顺带全局安装 codegraph
+# Node.js：多阶段拷贝，含 node-gyp 编译原生插件所需的头文件，顺带全局安装 codegraph 和 ast-grep
 COPY --from=node-src --chown=vscode:vscode /usr/local/include/node /usr/local/include/node
 COPY --from=node-src --chown=vscode:vscode /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=node-src /usr/local/bin/node /usr/local/bin/node
@@ -632,8 +636,10 @@ RUN set -eux \
         && if command -v corepack >/dev/null 2>&1; then corepack enable; fi \
         && npm --version \
         && node --version \
-        && npm i -g @colbymchenry/codegraph \
+        && npm i -g --allow-scripts=@colbymchenry/codegraph,@ast-grep/cli @colbymchenry/codegraph \
+        && npm i -g --allow-scripts=@colbymchenry/codegraph,@ast-grep/cli @ast-grep/cli \
         && codegraph --version \
+        && sg --version \
     "
 
 # 个人配置文件
