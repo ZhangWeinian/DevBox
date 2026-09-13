@@ -300,24 +300,38 @@ RUN set -eux \
     && yq --version
 
 # 静态二进制工具（GitHub Release）
-#   rr       ：record & replay 调试器，官方提供 x86_64 静态包
+#   rr       ：record & replay 调试器
 #   bazelisk ：Bazel 版本管理器，自动下载最新 Bazel
-#   mold     ：极快的链接器，官方提供静态二进制 tar.gz
+#   mold     ：极快的链接器
 RUN set -eux \
     && TMP_DIR="$(mktemp -d)" \
     && cd "${TMP_DIR}" \
-    && curl -fsSLO "https://github.com/rr-debugger/rr/releases/latest/download/rr-x86_64-linux.zip" \
-    && unzip -q rr-x86_64-linux.zip -d rr-dist \
-    && mv rr-dist/rr /usr/local/bin/rr \
+    && RR_VER=$(curl -fsSL https://api.github.com/repos/rr-debugger/rr/releases/latest \
+           | grep -Po '"tag_name":\s*"\K[0-9]+\.[0-9]+\.[0-9]+') \
+    && if [ -z "${RR_VER}" ]; then \
+           echo "FATAL: 无法从 GitHub API 获取 rr 最新版本号" >&2; \
+           exit 1; \
+       fi \
+    && curl -fsSL -o rr.tar.gz \
+       "https://github.com/rr-debugger/rr/releases/download/${RR_VER}/rr-${RR_VER}-Linux-x86_64.tar.gz" \
+    && tar -xzf rr.tar.gz \
+    && mv rr /usr/local/bin/rr \
     && chmod +x /usr/local/bin/rr \
     && curl -fsSL -o /usr/local/bin/bazelisk \
-        "https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64" \
+       "https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64" \
     && chmod +x /usr/local/bin/bazelisk \
     && ln -sf /usr/local/bin/bazelisk /usr/local/bin/bazel \
-    && curl -fsSLO "https://github.com/rui314/mold/releases/latest/download/mold-x86_64-linux.tar.gz" \
-    && tar -xzf mold-x86_64-linux.tar.gz \
-    && cp -a mold-x86_64-linux/bin/. /usr/local/bin/ \
-    && cp -a mold-x86_64-linux/lib/. /usr/local/lib/ 2>/dev/null || true \
+    && MOLD_VER=$(curl -fsSL https://api.github.com/repos/rui314/mold/releases/latest \
+           | grep -Po '"tag_name":\s*"v\K[0-9]+\.[0-9]+\.[0-9]+') \
+    && if [ -z "${MOLD_VER}" ]; then \
+           echo "FATAL: 无法从 GitHub API 获取 mold 最新版本号" >&2; \
+           exit 1; \
+       fi \
+    && curl -fsSL -o mold.tar.gz \
+       "https://github.com/rui314/mold/releases/download/v${MOLD_VER}/mold-${MOLD_VER}-x86_64-linux.tar.gz" \
+    && tar -xzf mold.tar.gz \
+    && cp -a "mold-${MOLD_VER}-x86_64-linux/bin/." /usr/local/bin/ \
+    && cp -a "mold-${MOLD_VER}-x86_64-linux/lib/." /usr/local/lib/ 2>/dev/null || true \
     && cd / \
     && rm -rf "${TMP_DIR}" \
     && ldconfig \
