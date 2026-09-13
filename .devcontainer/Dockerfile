@@ -300,9 +300,9 @@ RUN set -eux \
     && yq --version
 
 # 静态二进制工具（GitHub Release）
-#   rr       ：record & replay 调试器
+#   rr       ：record & replay 调试器，需要 share/rr/ 下的 xml 文件，整体装到 /opt/rr
 #   bazelisk ：Bazel 版本管理器，自动下载最新 Bazel
-#   mold     ：极快的链接器
+#   mold     ：极快的链接器，剥离顶层后 bin/lib/libexec 平铺，cp 到 /usr/local
 RUN set -eux \
     && TMP_DIR="$(mktemp -d)" \
     && cd "${TMP_DIR}" \
@@ -314,9 +314,14 @@ RUN set -eux \
        fi \
     && curl -fsSL -o rr.tar.gz \
        "https://github.com/rr-debugger/rr/releases/download/${RR_VER}/rr-${RR_VER}-Linux-x86_64.tar.gz" \
-    && tar -xzf rr.tar.gz --strip-components=1 \
-    && mv rr /usr/local/bin/rr \
-    && chmod +x /usr/local/bin/rr \
+    && mkdir -p /opt/rr \
+    && tar -xzf rr.tar.gz -C /opt/rr --strip-components=1 \
+    && if [ ! -x /opt/rr/bin/rr ]; then \
+           echo "FATAL: 未找到 /opt/rr/bin/rr，tar 内容如下：" >&2; \
+           tar -tzf rr.tar.gz >&2; \
+           exit 1; \
+       fi \
+    && ln -sf /opt/rr/bin/rr /usr/local/bin/rr \
     && curl -fsSL -o /usr/local/bin/bazelisk \
        "https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64" \
     && chmod +x /usr/local/bin/bazelisk \
@@ -329,9 +334,11 @@ RUN set -eux \
        fi \
     && curl -fsSL -o mold.tar.gz \
        "https://github.com/rui314/mold/releases/download/v${MOLD_VER}/mold-${MOLD_VER}-x86_64-linux.tar.gz" \
-    && tar -xzf mold.tar.gz --strip-components=1 \
-    && cp -a bin/. /usr/local/bin/ \
-    && cp -a lib/. /usr/local/lib/ 2>/dev/null || true \
+    && mkdir -p mold-dist \
+    && tar -xzf mold.tar.gz -C mold-dist --strip-components=1 \
+    && cp -a mold-dist/bin/. /usr/local/bin/ \
+    && cp -a mold-dist/lib/. /usr/local/lib/ \
+    && if [ -d mold-dist/libexec ]; then cp -a mold-dist/libexec/. /usr/local/libexec/; fi \
     && cd / \
     && rm -rf "${TMP_DIR}" \
     && ldconfig \
