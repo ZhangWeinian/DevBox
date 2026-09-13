@@ -314,7 +314,7 @@ RUN set -eux \
        fi \
     && curl -fsSL -o rr.tar.gz \
        "https://github.com/rr-debugger/rr/releases/download/${RR_VER}/rr-${RR_VER}-Linux-x86_64.tar.gz" \
-    && tar -xzf rr.tar.gz \
+    && tar -xzf rr.tar.gz --strip-components=1 \
     && mv rr /usr/local/bin/rr \
     && chmod +x /usr/local/bin/rr \
     && curl -fsSL -o /usr/local/bin/bazelisk \
@@ -329,9 +329,9 @@ RUN set -eux \
        fi \
     && curl -fsSL -o mold.tar.gz \
        "https://github.com/rui314/mold/releases/download/v${MOLD_VER}/mold-${MOLD_VER}-x86_64-linux.tar.gz" \
-    && tar -xzf mold.tar.gz \
-    && cp -a "mold-${MOLD_VER}-x86_64-linux/bin/." /usr/local/bin/ \
-    && cp -a "mold-${MOLD_VER}-x86_64-linux/lib/." /usr/local/lib/ 2>/dev/null || true \
+    && tar -xzf mold.tar.gz --strip-components=1 \
+    && cp -a bin/. /usr/local/bin/ \
+    && cp -a lib/. /usr/local/lib/ 2>/dev/null || true \
     && cd / \
     && rm -rf "${TMP_DIR}" \
     && ldconfig \
