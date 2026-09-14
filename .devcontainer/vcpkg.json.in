@@ -70,7 +70,6 @@
     "glm",
     "libpqxx",
     "hiredis",
-    "redis-plus-plus",
     "leveldb",
     "unqlite",
     "curl",

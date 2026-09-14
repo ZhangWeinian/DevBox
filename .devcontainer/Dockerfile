@@ -88,16 +88,6 @@ RUN set -eux \
            exit 1; \
        fi
 
-# 权限设计原则：
-#   /usr/local/bin、/usr/bin 等系统级目录永远保持 root:root 属主，不对 vscode 开放写权限
-#   root 天生可以写任何路径，不需要 chown 就能在这些目录里装 yq / rr / bazelisk / mold /
-#   uv 二进制 / LLVM 软链 / python 软链等；真正的坑在于反过来"让 vscode 用户写系统目录"
-#   （uv tool install 的 shim、npm -g 的全局包、corepack 的 shim 默认都会尝试写
-#   /usr/local/bin），一旦目录属主在漫长的构建历史中被任何一步意外改动，就会在某次
-#   构建里随机报 Permission denied。彻底的解法不是"哪里报错就在哪里前面补一次 chown"，
-#   而是让 vscode 只在自己独占的 /home/vscode/.local、/home/vscode/.npm-global 之类目录
-#   下写入，systeam 目录只允许 root 写。下文 uv / npm / corepack 三处都按此原则改造
-
 # 中文环境：locale / 字体 / 时区 / 中文 man
 ARG DEBIAN_FRONTEND=noninteractive
 RUN set -eux \
@@ -275,6 +265,8 @@ RUN set -eux \
         iwyu \
         linux-perf \
         sshpass \
+        bison \
+        flex \
     && apt-get autoremove -y \
     && apt-get clean -y \
     && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
@@ -311,10 +303,7 @@ RUN set -eux \
     && chmod +x /usr/local/bin/yq \
     && yq --version
 
-# 静态二进制工具（GitHub Release）
-#   rr       ：record & replay 调试器，需要 share/rr/ 下的 xml 文件，整体装到 /opt/rr
-#   bazelisk ：Bazel 版本管理器，自动下载最新 Bazel
-#   mold     ：极快的链接器，剥离顶层后 bin/lib/libexec 平铺，cp 到 /usr/local
+# 静态二进制工具
 RUN set -eux \
     && TMP_DIR="$(mktemp -d)" \
     && cd "${TMP_DIR}" \
@@ -446,15 +435,7 @@ RUN set -eux \
     && rm -rf /var/lib/apt/lists/* \
     && dotnet --version
 
-# uv：官方多架构镜像，直接 COPY 二进制，无需 curl/sh 安装脚本
-#
-# UV_TOOL_BIN_DIR 刻意指向 /home/vscode/.local/bin 而不是 /usr/local/bin：
-#   uv tool install 是以 vscode 身份运行的（su vscode -c ...），它需要对
-#   "可执行入口所在目录"有写权限。/usr/local/bin 是系统级目录，只应该由 root 写；
-#   一旦让 vscode 对它有写权限，后续任何一步 root 操作（apt 装包触发的 postinst、
-#   COPY 到该目录等）都有可能在权限位上产生漂移，导致 uv tool install 在某次
-#   构建里毫无预兆地报 Permission denied（这正是本文件之前踩过的坑）。
-#   把 bin 目录挪到 vscode 独占的 home 目录下，从设计上消除这类不确定性。
+# uv：官方多架构镜像，COPY 二进制
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 ENV UV_TOOL_DIR=/opt/uv/tools
 ENV UV_TOOL_BIN_DIR=/home/vscode/.local/bin
@@ -487,8 +468,7 @@ RUN set -eux \
         && uv python install --python-preference only-managed \
     "
 # uv 托管的 Python（python-build-standalone）bin/ 下必有 python3
-# python 一并软链跟随；pip 不做全局软链——本环境包管理统一走 uv（uv pip / uv tool）
-# 这两个软链由 root 创建，写入 /usr/local/bin 对 root 没有权限问题
+# python 一并软链跟随；pip 不做全局软链——本环境包管理统一走 uv
 RUN set -eux \
     && PYTHON_BIN="$(uv python find --python-preference only-managed)" \
     && [ -x "${PYTHON_BIN}" ] \
@@ -496,6 +476,43 @@ RUN set -eux \
     && ln -sf "${PYTHON_BIN}" /usr/local/bin/python \
     && python --version \
     && python3 --version
+
+# 通过 uv tool 安装开发工具到隔离 venv，bin 软链到 vscode 私有目录
+RUN set -eux \
+    && su vscode -c "\
+        set -eux \
+        && uv tool install cmake \
+        && uv tool install ninja \
+        && uv tool install meson \
+        && uv tool install cmakelang \
+        && uv tool install autoenv \
+        && uv tool install ruff \
+        && uv tool install lizard \
+        && uv tool install mypy \
+        && uv tool install pytest \
+        && uv tool install gcovr \
+    "
+
+RUN set -eux \
+    && cmake --version \
+    && ninja --version \
+    && meson --version \
+    && cmake-format --version \
+    && ruff --version \
+    && lizard --version \
+    && mypy --version \
+    && pytest --version \
+    && gcovr --version \
+    && su vscode -c "\
+        set -eux \
+        && cmake --version \
+        && meson --version \
+        && ruff --version \
+        && mypy --version \
+    " \
+    && ln -sf /home/vscode/.local/bin/cmake /usr/bin/cmake \
+    && ln -sf /home/vscode/.local/bin/ninja /usr/bin/ninja \
+    && ln -sf /home/vscode/.local/bin/meson /usr/bin/meson
 
 # Python 常用库（不含 CUDA/GPU 相关）：uv pip install --target 到固定目录，
 # 通过 PYTHONPATH 全局暴露，可被任意 python3 脚本直接 import
@@ -538,48 +555,9 @@ RUN set -eux \
             python3 -c "import numpy, pandas, requests, pydantic, yaml, lxml, openpyxl, libcst; print('pydeps 全局可见性验证通过')"; \
        fi
 
-# 通过 uv tool 安装开发工具到隔离 venv，bin 软链到 vscode 私有目录
-RUN set -eux \
-    && su vscode -c "\
-        set -eux \
-        && uv tool install cmake \
-        && uv tool install ninja \
-        && uv tool install meson \
-        && uv tool install cmakelang \
-        && uv tool install autoenv \
-        && uv tool install ruff \
-        && uv tool install lizard \
-        && uv tool install mypy \
-        && uv tool install pytest \
-        && uv tool install gcovr \
-    "
-# cmake/ninja/meson 额外软链到 /usr/bin：sudo 默认的 secure_path 不包含
-# /home/vscode/.local/bin，若脚本里出现 `sudo cmake ...` 之类调用会找不到命令；
-# 这三个软链由 root 创建，root 对 /usr/bin 天然有写权限
-RUN set -eux \
-    && cmake --version \
-    && ninja --version \
-    && meson --version \
-    && cmake-format --version \
-    && ruff --version \
-    && lizard --version \
-    && mypy --version \
-    && pytest --version \
-    && gcovr --version \
-    && su vscode -c "\
-        set -eux \
-        && cmake --version \
-        && meson --version \
-        && ruff --version \
-        && mypy --version \
-    " \
-    && ln -sf /home/vscode/.local/bin/cmake /usr/bin/cmake \
-    && ln -sf /home/vscode/.local/bin/ninja /usr/bin/ninja \
-    && ln -sf /home/vscode/.local/bin/meson /usr/bin/meson
-
 # LLVM/Clang 工具链：从 llvm-builder 阶段 COPY
 #   构建阶段已用 dpkg -L 精确收集"LLVM 包"的全部文件，保留原路径
-#   主阶段直接按路径还原：/usr/bin/*-23、/usr/lib/llvm-23/*、
+#   主阶段直接按路径还原：/usr/bin/*-23、/usr/lib/llvm-23/*
 #   /usr/lib/x86_64-linux-gnu/libclang-cpp.so.23* 等全部到位
 #   ldconfig 重建缓存后，clang 可正确解析 libclang-cpp.so.23.1 等运行期依赖
 COPY --from=llvm-builder /opt/llvm-files /opt/llvm-files
@@ -696,11 +674,11 @@ RUN set -eux \
 # Node.js：多阶段拷贝，含 node-gyp 编译原生插件所需的头文件，顺带全局安装 codegraph 和 ast-grep
 #
 # NPM_CONFIG_PREFIX 刻意指向 /home/vscode/.npm-global 而不是走默认值：
-#   npm 的默认全局安装前缀跟随 node 可执行文件所在目录（这里是 /usr/local），
+#   npm 的默认全局安装前缀跟随 node 可执行文件所在目录（这里是 /usr/local）
 #   `npm i -g` 会往 /usr/local/lib/node_modules、/usr/local/bin 写入新包的 bin
 #   shim；这和 uv tool install 是同一类"非 root 用户写系统目录"的坑，只是本文件
 #   目前还没跑到这一步。同理 corepack enable 默认也会把 yarn/pnpm 的 shim
-#   装到 node 所在目录，同样需要显式改到 vscode 私有目录（--install-directory）。
+#   装到 node 所在目录，同样需要显式改到 vscode 私有目录（--install-directory）
 ENV NPM_CONFIG_PREFIX=/home/vscode/.npm-global
 ENV PATH="/home/vscode/.npm-global/bin:${PATH}"
 COPY --from=node-src --chown=vscode:vscode /usr/local/include/node /usr/local/include/node
@@ -799,8 +777,7 @@ ENV VCPKG_DEFAULT_TRIPLET=x64-linux
 ENV PATH="${PATH}:${VCPKG_ROOT}"
 
 # 显式 clone vcpkg，并无条件补齐 master 全量历史
-# VCPKG_ROOT 虽然位于 /usr/local 下，但整个目录树在这里就完整 chown 给 vscode，
-# 后续没有任何 root 步骤再写入这棵树，因此不会重演 /usr/local/bin 那类漂移问题
+# VCPKG_ROOT 虽然位于 /usr/local 下，但整个目录树在这里就完整 chown 给 vscode
 RUN set -eux \
     && mkdir -p /home/vscode/.cache/vcpkg/downloads \
     && chown vscode:vscode /home/vscode/.cache/vcpkg/downloads \
@@ -835,26 +812,13 @@ case "$(command -v c++)" in
 esac
 
 # 刷新 vcpkg 本体到当前默认分支最新 commit
-DEFAULT_BRANCH=""
-for i in 1 2 3; do
-    DEFAULT_BRANCH=$(git -C "${VCPKG_ROOT}" remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}')
-    if [ -n "${DEFAULT_BRANCH}" ]; then
-        break
-    fi
-    sleep 3
-done
-if [ -z "${DEFAULT_BRANCH}" ]; then
-    DEFAULT_BRANCH="master"
-fi
-
 if git -C "${VCPKG_ROOT}" rev-parse --is-shallow-repository | grep -q true; then
-    git -C "${VCPKG_ROOT}" fetch --quiet --unshallow origin "${DEFAULT_BRANCH}"
+    git -C "${VCPKG_ROOT}" fetch --quiet --unshallow origin master
 else
-    git -C "${VCPKG_ROOT}" fetch --quiet origin "${DEFAULT_BRANCH}"
+    git -C "${VCPKG_ROOT}" fetch --quiet origin master
 fi
-
-git -C "${VCPKG_ROOT}" checkout --quiet "${DEFAULT_BRANCH}"
-git -C "${VCPKG_ROOT}" reset --quiet --hard "origin/${DEFAULT_BRANCH}"
+git -C "${VCPKG_ROOT}" checkout --quiet master
+git -C "${VCPKG_ROOT}" reset --quiet --hard origin/master
 bash "${VCPKG_ROOT}/bootstrap-vcpkg.sh" -disableMetrics
 vcpkg --version
 

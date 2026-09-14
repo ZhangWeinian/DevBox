@@ -25,7 +25,7 @@ rope
 redbaron
 parso
 tree-sitter
-tree-sitter-languages
+tree-sitter-language-pack
 
 # 代码格式化 / Lint 的可编程接口（脚本内直接调用，而非仅命令行）
 black
