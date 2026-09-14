@@ -103,6 +103,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN set -eux \
     && dpkg --add-architecture arm64 \
     && apt-get update \
+    && apt-get upgrade -yq \
     && apt-get -yq install --no-install-recommends \
         locales \
         tzdata \
