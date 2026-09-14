@@ -273,6 +273,7 @@ RUN set -eux \
         bpftrace \
         iwyu \
         linux-perf \
+        sshpass \
     && apt-get autoremove -y \
     && apt-get clean -y \
     && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
