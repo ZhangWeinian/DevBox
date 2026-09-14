@@ -1,0 +1,174 @@
+# devbox 全局 Python 依赖清单（uv pip install --target 安装，全局可 import）
+#   版本号故意不锁定，随 uv 解析到的最新兼容版本安装
+
+# 结构化数据格式：解析 + 写回
+pyyaml
+ruamel.yaml
+toml
+tomlkit
+ujson
+orjson
+jsonlines
+json5
+xmltodict
+lxml
+defusedxml
+configobj
+python-configuration
+strictyaml
+
+# 代码本身的解析与改写（AST 级操作，不只是文本替换）
+libcst
+astor
+astunparse
+rope
+redbaron
+parso
+tree-sitter
+tree-sitter-languages
+
+# 代码格式化 / Lint 的可编程接口（脚本内直接调用，而非仅命令行）
+black
+isort
+autopep8
+yapf
+
+# 文本替换 / 差异对比 / 补丁应用
+regex
+patch-ng
+whatthepatch
+diff-match-patch
+deepdiff
+fuzzywuzzy
+rapidfuzz
+python-Levenshtein
+
+# Office / 富文本 / 文档类文件读写
+openpyxl
+xlrd
+xlsxwriter
+python-docx
+python-pptx
+python-magic
+odfpy
+pypdf
+pdfplumber
+pymupdf
+markdownify
+mistune
+docutils
+weasyprint
+
+# CSV / 表格 / 二进制结构化数据
+pandas
+polars
+pyarrow
+tabulate
+csvkit
+h5py
+tables
+
+# 压缩包 / 归档文件的增删查改
+py7zr
+rarfile
+zipfile-deflate64
+patool
+
+# 文件系统操作 / 路径处理 / 监控
+pathlib2
+send2trash
+watchdog
+pathspec
+fs
+
+# 编码检测 / 二进制探测
+chardet
+charset-normalizer
+filetype
+
+# 模板引擎（批量生成/改写配置文件、代码骨架）
+jinja2
+mako
+string2string
+
+# 网络与 HTTP
+requests
+httpx
+urllib3
+aiohttp
+websockets
+
+# CLI / 终端体验
+click
+typer
+argparse
+rich
+tqdm
+loguru
+colorama
+
+# 数据校验与配置管理
+pydantic
+pydantic-settings
+python-dotenv
+attrs
+cerberus
+marshmallow
+dynaconf
+
+# 数据处理与科学计算（纯 CPU）
+numpy
+scipy
+scikit-learn
+matplotlib
+pillow
+sympy
+
+# HTML / 网页解析
+beautifulsoup4
+html5lib
+selectolax
+parsel
+
+# 时间与日期
+python-dateutil
+arrow
+pendulum
+tzdata
+
+# 数据库与缓存客户端
+sqlalchemy
+alembic
+redis
+pyzmq
+pymongo
+psycopg2-binary
+
+# 系统与网络工具
+psutil
+paramiko
+fabric
+scp
+netifaces
+
+# 加密与安全
+cryptography
+pyjwt
+bcrypt
+passlib
+
+# Git / 版本控制脚本化操作
+gitpython
+pygit2
+
+# 测试与 Mock（脚本自身的可测试性）
+faker
+freezegun
+responses
+
+# 通用工具
+more-itertools
+toolz
+networkx
+humanize
+python-slugify

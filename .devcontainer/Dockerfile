@@ -497,7 +497,48 @@ RUN set -eux \
     && python --version \
     && python3 --version
 
-# 开发工具（全部通过 uv tool 安装到隔离 venv，bin 软链到 vscode 私有目录）
+# Python 常用库（不含 CUDA/GPU 相关）：uv pip install --target 到固定目录，
+# 通过 PYTHONPATH 全局暴露，可被任意 python3 脚本直接 import
+#
+# 设计要点（与 vcpkg 缓存架构保持一致，服务同一个目标：镜像内置 + 具名卷持久化）：
+#   - 用 --target 而不是 --system：uv 托管的 Python 解释器路径形如
+#     /opt/uv/python/cpython-3.x.y-.../，随 uv 升级会变化，不适合直接作为
+#     具名卷挂载点；--target 装进一个版本无关的固定目录，import.sh 才能稳定地
+#     把这个目录接管为持久化卷，解释器补丁版本升级不影响已装的纯 Python 包
+#   - 通过 ENV PYTHONPATH 全局暴露：不需要激活虚拟环境，任何 python3/REPL/
+#     脚本都能直接 import；与 uv tool install（面向命令行工具、隔离 venv）
+#     是两套互不冲突的机制——前者装"可执行命令"，这里装"可导入的库"
+#   - requirements.txt 内嵌于 Dockerfile（heredoc），版本故意不锁定，随 uv
+#     解析到的最新兼容版本安装，与全篇"始终拉取最新版本"的风格一致
+#   - 默认 WITH_PYDEPS=1：多为预编译 wheel，构建耗时以十几秒到一两分钟计
+#     （不同于 vcpkg 需要从源码编译 C++ 依赖），故默认开启
+ARG WITH_PYDEPS=1
+ENV PYDEPS_TARGET=/home/vscode/.local/lib/python-global-packages
+ENV PYTHONPATH="${PYDEPS_TARGET}:${PYTHONPATH:-}"
+COPY requirements.txt.in /home/vscode/.pydeps-manifest/requirements.txt.in
+RUN set -eux \
+    && mkdir -p "${PYDEPS_TARGET}" /home/vscode/.pydeps-manifest \
+    && chown -R vscode:vscode "${PYDEPS_TARGET}" /home/vscode/.pydeps-manifest \
+    && grep -vE '^\s*(#|$)' /home/vscode/.pydeps-manifest/requirements.txt.in \
+        > /home/vscode/.pydeps-manifest/requirements.txt \
+    && chown vscode:vscode /home/vscode/.pydeps-manifest/requirements.txt \
+    && if [ "${WITH_PYDEPS}" = "1" ]; then \
+            PYTHON_BIN="$(uv python find --python-preference only-managed)"; \
+            su vscode -c "\
+                set -eux \
+                && uv pip install \
+                    --python '${PYTHON_BIN}' \
+                    --target '${PYDEPS_TARGET}' \
+                    -r /home/vscode/.pydeps-manifest/requirements.txt \
+                && '${PYTHON_BIN}' -c 'import numpy, pandas, requests, pydantic, yaml, lxml, openpyxl, libcst' \
+            "; \
+       fi
+RUN set -eux \
+    && if [ "${WITH_PYDEPS}" = "1" ]; then \
+            python3 -c "import numpy, pandas, requests, pydantic, yaml, lxml, openpyxl, libcst; print('pydeps 全局可见性验证通过')"; \
+       fi
+
+# 通过 uv tool 安装开发工具到隔离 venv，bin 软链到 vscode 私有目录
 RUN set -eux \
     && su vscode -c "\
         set -eux \
