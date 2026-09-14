@@ -86,9 +86,17 @@ RUN set -eux \
            echo "  原因: 交叉编译工具链与 vcpkg triplet 均按 amd64 硬编码" >&2; \
            echo "  处理: 在 x86_64 机器上构建，或指定 --platform linux/amd64" >&2; \
            exit 1; \
-       fi \
-    && chown vscode:vscode /usr/local/bin \
-    && chmod u+w /usr/local/bin
+       fi
+
+# 权限设计原则：
+#   /usr/local/bin、/usr/bin 等系统级目录永远保持 root:root 属主，不对 vscode 开放写权限
+#   root 天生可以写任何路径，不需要 chown 就能在这些目录里装 yq / rr / bazelisk / mold /
+#   uv 二进制 / LLVM 软链 / python 软链等；真正的坑在于反过来"让 vscode 用户写系统目录"
+#   （uv tool install 的 shim、npm -g 的全局包、corepack 的 shim 默认都会尝试写
+#   /usr/local/bin），一旦目录属主在漫长的构建历史中被任何一步意外改动，就会在某次
+#   构建里随机报 Permission denied。彻底的解法不是"哪里报错就在哪里前面补一次 chown"，
+#   而是让 vscode 只在自己独占的 /home/vscode/.local、/home/vscode/.npm-global 之类目录
+#   下写入，systeam 目录只允许 root 写。下文 uv / npm / corepack 三处都按此原则改造
 
 # 中文环境：locale / 字体 / 时区 / 中文 man
 ARG DEBIAN_FRONTEND=noninteractive
@@ -126,7 +134,8 @@ RUN set -eux \
     && test "$(date +%z)" = "+0800" \
     && readlink /etc/localtime | grep -q 'Asia/Shanghai' \
     && if command -v man >/dev/null 2>&1; then \
-            man -w -L zh_CN.UTF-8 ls 2>/dev/null | grep -q '/zh_CN/'  || echo "NOTE: ls 中文 man 页缺失，man 将回退英文页" >&2; \
+            man -w -L zh_CN.UTF-8 ls 2>/dev/null | grep -q '/zh_CN/' \
+            || echo "NOTE: ls 中文 man 页缺失，man 将回退英文页" >&2; \
         fi
 
 # 基础系统包
@@ -436,9 +445,17 @@ RUN set -eux \
     && dotnet --version
 
 # uv：官方多架构镜像，直接 COPY 二进制，无需 curl/sh 安装脚本
+#
+# UV_TOOL_BIN_DIR 刻意指向 /home/vscode/.local/bin 而不是 /usr/local/bin：
+#   uv tool install 是以 vscode 身份运行的（su vscode -c ...），它需要对
+#   "可执行入口所在目录"有写权限。/usr/local/bin 是系统级目录，只应该由 root 写；
+#   一旦让 vscode 对它有写权限，后续任何一步 root 操作（apt 装包触发的 postinst、
+#   COPY 到该目录等）都有可能在权限位上产生漂移，导致 uv tool install 在某次
+#   构建里毫无预兆地报 Permission denied（这正是本文件之前踩过的坑）。
+#   把 bin 目录挪到 vscode 独占的 home 目录下，从设计上消除这类不确定性。
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 ENV UV_TOOL_DIR=/opt/uv/tools
-ENV UV_TOOL_BIN_DIR=/usr/local/bin
+ENV UV_TOOL_BIN_DIR=/home/vscode/.local/bin
 ENV UV_CACHE_DIR=/home/vscode/.cache/uv
 ENV PIP_CACHE_DIR=/home/vscode/.cache/pip
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
@@ -447,12 +464,18 @@ RUN set -eux \
     && mkdir -p \
         "${UV_PYTHON_INSTALL_DIR}" \
         "${UV_TOOL_DIR}" \
+        "${UV_TOOL_BIN_DIR}" \
         "${UV_CACHE_DIR}" \
         "${PIP_CACHE_DIR}" \
     && chown -R vscode:vscode \
         /opt/uv \
+        /home/vscode/.local \
         "${UV_CACHE_DIR}" \
-        "${PIP_CACHE_DIR}"
+        "${PIP_CACHE_DIR}" \
+    && su vscode -c "test -w '${UV_TOOL_BIN_DIR}'"
+
+# 把 vscode 私有的 bin 目录加入全局 PATH（写进镜像 Config.Env，对 root/vscode 都生效）
+ENV PATH="/home/vscode/.local/bin:${PATH}"
 
 # Python：通过 uv 安装最新受管理版本，并建立全局软链
 # 全程只有一套 Python，工具链和临时脚本都能找到，不产生版本歧义
@@ -463,6 +486,7 @@ RUN set -eux \
     "
 # uv 托管的 Python（python-build-standalone）bin/ 下必有 python3
 # python 一并软链跟随；pip 不做全局软链——本环境包管理统一走 uv（uv pip / uv tool）
+# 这两个软链由 root 创建，写入 /usr/local/bin 对 root 没有权限问题
 RUN set -eux \
     && PYTHON_BIN="$(uv python find --python-preference only-managed)" \
     && [ -x "${PYTHON_BIN}" ] \
@@ -471,7 +495,7 @@ RUN set -eux \
     && python --version \
     && python3 --version
 
-# 开发工具（全部通过 uv tool 安装到隔离 venv，bin 软链到 /usr/local/bin）
+# 开发工具（全部通过 uv tool 安装到隔离 venv，bin 软链到 vscode 私有目录）
 RUN set -eux \
     && su vscode -c "\
         set -eux \
@@ -485,9 +509,10 @@ RUN set -eux \
         && uv tool install mypy \
         && uv tool install pytest \
         && uv tool install gcovr \
-        && uv tool install mcp-vector-search \
-        && uv tool install codegraph-cli \
     "
+# cmake/ninja/meson 额外软链到 /usr/bin：sudo 默认的 secure_path 不包含
+# /home/vscode/.local/bin，若脚本里出现 `sudo cmake ...` 之类调用会找不到命令；
+# 这三个软链由 root 创建，root 对 /usr/bin 天然有写权限
 RUN set -eux \
     && cmake --version \
     && ninja --version \
@@ -498,8 +523,6 @@ RUN set -eux \
     && mypy --version \
     && pytest --version \
     && gcovr --version \
-    && mcp-vector-search --version \
-    && codegraph-cli --version \
     && su vscode -c "\
         set -eux \
         && cmake --version \
@@ -507,9 +530,9 @@ RUN set -eux \
         && ruff --version \
         && mypy --version \
     " \
-    && ln -sf /usr/local/bin/cmake /usr/bin/cmake \
-    && ln -sf /usr/local/bin/ninja /usr/bin/ninja \
-    && ln -sf /usr/local/bin/meson /usr/bin/meson
+    && ln -sf /home/vscode/.local/bin/cmake /usr/bin/cmake \
+    && ln -sf /home/vscode/.local/bin/ninja /usr/bin/ninja \
+    && ln -sf /home/vscode/.local/bin/meson /usr/bin/meson
 
 # LLVM/Clang 工具链：从 llvm-builder 阶段 COPY
 #   构建阶段已用 dpkg -L 精确收集"LLVM 包"的全部文件，保留原路径
@@ -628,6 +651,15 @@ RUN set -eux \
     && java --version
 
 # Node.js：多阶段拷贝，含 node-gyp 编译原生插件所需的头文件，顺带全局安装 codegraph 和 ast-grep
+#
+# NPM_CONFIG_PREFIX 刻意指向 /home/vscode/.npm-global 而不是走默认值：
+#   npm 的默认全局安装前缀跟随 node 可执行文件所在目录（这里是 /usr/local），
+#   `npm i -g` 会往 /usr/local/lib/node_modules、/usr/local/bin 写入新包的 bin
+#   shim；这和 uv tool install 是同一类"非 root 用户写系统目录"的坑，只是本文件
+#   目前还没跑到这一步。同理 corepack enable 默认也会把 yarn/pnpm 的 shim
+#   装到 node 所在目录，同样需要显式改到 vscode 私有目录（--install-directory）。
+ENV NPM_CONFIG_PREFIX=/home/vscode/.npm-global
+ENV PATH="/home/vscode/.npm-global/bin:${PATH}"
 COPY --from=node-src --chown=vscode:vscode /usr/local/include/node /usr/local/include/node
 COPY --from=node-src --chown=vscode:vscode /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=node-src /usr/local/bin/node /usr/local/bin/node
@@ -637,11 +669,14 @@ RUN set -eux \
     && if [ -d /usr/local/lib/node_modules/corepack ]; then \
             ln -sf /usr/local/lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack; \
         fi \
-    && mkdir -p /home/vscode/.npm \
-    && chown -R vscode:vscode /home/vscode/.npm \
+    && mkdir -p /home/vscode/.npm /home/vscode/.npm-global/bin \
+    && chown -R vscode:vscode /home/vscode/.npm /home/vscode/.npm-global \
+    && su vscode -c "test -w /home/vscode/.npm-global" \
     && su vscode -c "\
         set -eux \
-        && if command -v corepack >/dev/null 2>&1; then corepack enable; fi \
+        && if command -v corepack >/dev/null 2>&1; then \
+               corepack enable --install-directory /home/vscode/.npm-global/bin; \
+           fi \
         && npm --version \
         && node --version \
         && npm i -g --allow-scripts=@colbymchenry/codegraph,@ast-grep/cli @colbymchenry/codegraph \
@@ -721,6 +756,8 @@ ENV VCPKG_DEFAULT_TRIPLET=x64-linux
 ENV PATH="${PATH}:${VCPKG_ROOT}"
 
 # 显式 clone vcpkg，并无条件补齐 master 全量历史
+# VCPKG_ROOT 虽然位于 /usr/local 下，但整个目录树在这里就完整 chown 给 vscode，
+# 后续没有任何 root 步骤再写入这棵树，因此不会重演 /usr/local/bin 那类漂移问题
 RUN set -eux \
     && mkdir -p /home/vscode/.cache/vcpkg/downloads \
     && chown vscode:vscode /home/vscode/.cache/vcpkg/downloads \
@@ -799,6 +836,7 @@ EOF
 #   缓存放 BuildKit 缓存可跨构建复用，同时避免把大量编译缓存写进镜像层
 # archives 不使用 cache mount（编译产物必须进镜像层，供 import.sh 同步至持久化卷）
 # 只有 WITH_VCPKG=1（build.sh --with-vcpkg）才真正执行 manifest 依赖编译
+# uid=1000/gid=1000 对应 devcontainers/base 镜像中 vscode 用户的默认 UID/GID
 RUN --mount=type=cache,target=/home/vscode/.cache/vcpkg/downloads,id=vcpkg-downloads-cache,uid=1000,gid=1000 \
     --mount=type=cache,target=/home/vscode/.cache/ccache,id=ccache-build,uid=1000,gid=1000 \
     set -eux \
